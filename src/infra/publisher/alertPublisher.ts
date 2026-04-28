@@ -31,9 +31,9 @@ export async function publishAlert(input: PublishAlertInput): Promise<void> {
     status: "pending"
   });
 
-  if (process.env.TELEGRAM_ALERT_ENABLED !== "true" || !requestUrl) {
+  if (!requestUrl) {
     outbound.status = "failed";
-    outbound.error_text = "telegram_alert_api_disabled_or_url_missing";
+    outbound.error_text = "telegram_alert_api_url_missing";
     await outbound.save();
     return;
   }

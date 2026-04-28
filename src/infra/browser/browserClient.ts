@@ -1,5 +1,6 @@
 import puppeteer, { Browser, Page } from "puppeteer";
 import { MonitorTarget } from "../../config/targets";
+import { logger } from "../logging/logger";
 
 export interface RuntimeTarget extends MonitorTarget {
   page?: Page;
@@ -31,7 +32,18 @@ export class BrowserClient {
       }
       if (!target.page) {
         target.page = await this.browser.newPage();
-        await target.page.goto(target.url);
+        try {
+          await target.page.goto(target.url, {
+            waitUntil: "networkidle2",
+            timeout: Number(process.env.BROWSER_PAGE_GOTO_TIMEOUT_MS ?? "30000")
+          });
+        } catch (error) {
+          logger.error("Initial goto failed", {
+            target: target.name,
+            url: target.url,
+            error: String(error)
+          });
+        }
       }
     }
   }

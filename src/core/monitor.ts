@@ -1,6 +1,7 @@
 import { DateTime } from "luxon";
 import { Op } from "sequelize";
 import { MonitorTarget } from "../config/targets";
+import { loadGitisContentWithDelay } from "./gitisModule";
 import { publishAlert } from "../infra/publisher/alertPublisher";
 import { logger } from "../infra/logging/logger";
 import { saveHtmlSnapshot } from "../infra/logging/outputHtmlLogger";
@@ -55,8 +56,20 @@ function detectStatusType(msg: string): ResourceStatus {
   return "key_ok";
 }
 
+function isBrowserErrorPage(content: string): boolean {
+  const normalized = content.toLowerCase();
+  return (
+    normalized.includes("err_connection_timed_out") ||
+    normalized.includes("err_name_not_resolved") ||
+    normalized.includes("err_internet_disconnected") ||
+    normalized.includes("net::err_") ||
+    normalized.includes("this site can't be reached") ||
+    normalized.includes("не удается получить доступ к сайту")
+  );
+}
+
 async function writeStatusLog(target: RuntimeTarget, status: ResourceStatus, details: string): Promise<void> {
-  const targetId = targetIdMap.get(target.name);
+  const targetId = targetIdMap.get(target.url);
   if (!targetId) {
     return;
   }
@@ -109,7 +122,7 @@ async function sentUser(msg: string, status: number, updDP: boolean, target: Run
   }
 
   await writeStatusLog(target, statusType, msg);
-  const targetId = targetIdMap.get(target.name);
+  const targetId = targetIdMap.get(target.url);
   if (targetId) {
     await publishAlert({
       targetId,
@@ -151,7 +164,15 @@ async function puppeteerDebug(target: RuntimeTarget): Promise<void> {
   try {
     target.requested = true;
     await target.page.setViewport({ width: 1920, height: 1080 });
-    await target.page.reload({ waitUntil: "networkidle2", timeout: 0 });
+    const shouldNavigate = !target.page.url().includes(target.url);
+    if (shouldNavigate) {
+      await target.page.goto(target.url, {
+        waitUntil: "networkidle2",
+        timeout: Number(process.env.BROWSER_PAGE_GOTO_TIMEOUT_MS ?? "30000")
+      });
+    } else {
+      await target.page.reload({ waitUntil: "networkidle2", timeout: 0 });
+    }
 
     if (target.waitForSelector) {
       let exists = false;
@@ -185,7 +206,27 @@ async function puppeteerDebug(target: RuntimeTarget): Promise<void> {
     }
 
     const rawContent = await target.page.content();
-    const content = rawContent.toLowerCase();
+    let content = rawContent.toLowerCase();
+    if (isBrowserErrorPage(content)) {
+      await sentUser(`Сайт _${target.name}_ недоступен (browser_error_page)`, 1, true, target);
+      return;
+    }
+
+    if (target.theaterId === "GITIS") {
+      const gitis = await loadGitisContentWithDelay(target.page);
+      content = gitis.content;
+      if (!gitis.hasOneCourse) {
+        await sentUser(
+          `Дату не нашёл !! ${target.name} (модалка не открыта, .one-course не найден)`,
+          0,
+          true,
+          target
+        );
+        const savedPath = await saveHtmlSnapshot("key_error", target.name, rawContent);
+        logger.info("Saved key_error html snapshot (.one-course missing)", { target: target.name, path: savedPath });
+        return;
+      }
+    }
     if (content.indexOf(target.searchText.toLowerCase()) !== -1) {
       if (target.searchMode === "not_contains") {
         await sentUser(`${target.name}: Поиск слова '${target.searchText}' положительный, открыли запись!!!`, 0, true, target);
@@ -197,10 +238,10 @@ async function puppeteerDebug(target: RuntimeTarget): Promise<void> {
         await sentUser(`${target.name}: Запись на<b><u>${target.searchText}</u></b>не открыта`, 0, true, target);
       }
     } else if (content.indexOf("прослушивание доступна зарегистрированным пользователям") === -1) {
-      if (target.name.startsWith("GITIS")) {
+      if (target.theaterId === "GITIS") {
         const dates = await findDate(content);
         if (dates !== "") {
-          if (!(target.name === "GITIS_Пирогов" && dates === "2025-04-19")) {
+          if (!(target.name === "GITIS_Пирогов" && dates === "2026-05-20")) {
             await sentUser(`!!! ${target.name}: Похоже есть свободные даты ${dates} !!!`, 2, true, target);
           }
         } else {
@@ -358,11 +399,18 @@ export async function runMonitor(targets: MonitorTarget[]): Promise<void> {
 
   for (const target of runtimeTargets) {
     const [row] = await ResourceTarget.findOrCreate({
-      where: { code: target.name },
-      defaults: { code: target.name, url: target.url, enabled: target.enabled }
+      where: { url: target.url },
+      defaults: { code: target.name, theater_id: target.theaterId, url: target.url, enabled: target.enabled }
     });
-    targetIdMap.set(target.name, row.id);
-    if (row.url !== target.url || row.enabled !== target.enabled) {
+    targetIdMap.set(target.url, row.id);
+    if (
+      row.code !== target.name ||
+      row.url !== target.url ||
+      row.enabled !== target.enabled ||
+      row.theater_id !== target.theaterId
+    ) {
+      row.code = target.name;
+      row.theater_id = target.theaterId;
       row.url = target.url;
       row.enabled = target.enabled;
       await row.save();

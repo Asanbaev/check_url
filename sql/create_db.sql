@@ -4,15 +4,32 @@ CREATE DATABASE IF NOT EXISTS `check_url`
 
 USE `check_url`;
 
+CREATE TABLE IF NOT EXISTS `theater` (
+  `id` VARCHAR(32) NOT NULL,
+  `name` VARCHAR(128) NOT NULL,
+  PRIMARY KEY (`id`)
+) ENGINE=InnoDB
+  DEFAULT CHARSET=utf8mb4
+  COLLATE=utf8mb4_unicode_ci;
+
+INSERT INTO `theater` (`id`, `name`) VALUES
+  ('GITIS', 'ГИТИС'),
+  ('VGIK', 'ВГИК'),
+  ('RGSI', 'РГИСИ')
+ON DUPLICATE KEY UPDATE `name` = VALUES(`name`);
+
 CREATE TABLE IF NOT EXISTS `target` (
   `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
   `code` VARCHAR(128) NOT NULL,
-  `url` TEXT NOT NULL,
+  `theater_id` VARCHAR(32) NOT NULL,
+  `url` VARCHAR(2048) NOT NULL,
   `enabled` TINYINT(1) NOT NULL DEFAULT 0,
   `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (`id`),
-  UNIQUE KEY `uniq_target_code` (`code`) USING BTREE
+  UNIQUE KEY `uniq_target_url` (`url`) USING BTREE,
+  KEY `idx_target_theater` (`theater_id`),
+  CONSTRAINT `fk_target_theater` FOREIGN KEY (`theater_id`) REFERENCES `theater` (`id`)
 ) ENGINE=InnoDB
   DEFAULT CHARSET=utf8mb4
   COLLATE=utf8mb4_unicode_ci;
@@ -20,7 +37,7 @@ CREATE TABLE IF NOT EXISTS `target` (
 CREATE TABLE IF NOT EXISTS `status_log` (
   `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
   `target_id` BIGINT UNSIGNED NOT NULL,
-  `status` ENUM('no_slots', 'slots_opened', 'site_unreachable', 'site_error') NOT NULL,
+  `status` ENUM('key_ok', 'key_false', 'unreachable', 'error', 'auth', 'key_error') NOT NULL,
   `details` TEXT NULL,
   `detected_at` DATETIME NOT NULL,
   `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
