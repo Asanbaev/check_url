@@ -1,0 +1,1 @@
+/usr/bin/google-chrome --remote-debugging-port=9222 --user-data-dir="/tmp/chrome-profile-debug" --no-first-run --no-default-browser-check --disable-gpu --no-sandbox --disable-setuid-sandbox --start-maximized

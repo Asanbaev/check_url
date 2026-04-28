@@ -1,0 +1,96 @@
+node_modules/
+dist/
+
+# Environment variables
+.env
+.env.*
+!.env.example
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Runtime data
+*.pid
+*.seed
+*.pid.lock
+
+# Build and cache
+.tsbuildinfo
+.cache/
+.eslintcache
+
+# IDE/system
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+# --- Секреты и локальная конфигурация ---
+.env
+.env.*
+!.env.example
+!**/.env.example
+!.env*.example
+!**/.env*.example
+.envL
+.env.prod
+.env.local
+.env.development
+.env.production
+*.p12
+!**/doc/**.key
+
+# --- Зависимости и сборки ---
+node_modules/
+**/dist/
+**/build/
+.dart_tool/
+*.iml
+
+# --- Логи, отладочный вывод, отчёты npm ---
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+npm-install.log
+lerna-debug.log*
+.pnpm-debug.log*
+
+# --- Каталоги с записью приложения (консоль/отладка в файлы) ---
+/outputs/
+
+# --- Python ---
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.Python
+
+# --- IDE и локальные настройки редактора ---
+.vs/
+.idea/
+*.swp
+*~
+
+# --- Прочее (исторические правила проекта) ---
+/copyDB
+/public
+*.reg
+/bin
+/obj
+*.pdf
+*.njsproj
+/Project3.njsproj.user
+*.sln
+
+# Служебные txt-логи в корне (не трогаем requirements.txt и т.п. в подпроектах явно)
+/*.txt
+
+# macOS
+.DS_Store
+
+# Опционально: локальные артефакты Cursor (раскомментируйте при желании)
+# .cursor/
