@@ -14,10 +14,10 @@ export async function saveHtmlSnapshot(status: string, targetCode: string, html:
   const outputsDir = resolveOutputsDir();
   fs.mkdirSync(outputsDir, { recursive: true });
 
-  const yyyymmdd = DateTime.local().setZone("Europe/Moscow").toFormat("yyyyLLdd");
+  const yyyymmddhhmmss = DateTime.local().setZone("Europe/Moscow").toFormat("yyyyLLdd_HHmmss");
   const safeStatus = sanitizeFilePart(status);
   const safeTargetCode = sanitizeFilePart(targetCode);
-  const fileName = `${yyyymmdd}_${safeStatus}_${safeTargetCode}.html`;
+  const fileName = `${yyyymmddhhmmss}_${safeStatus}_${safeTargetCode}.html`;
   const fullPath = path.join(outputsDir, fileName);
 
   await fs.promises.writeFile(fullPath, html, "utf8");

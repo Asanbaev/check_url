@@ -13,6 +13,10 @@ let dateNow = "";
 let intHour = Number(process.env.MSG_MIN_HOURS ?? "3");
 const msgMinValue = Number(process.env.MSG_MIN_HOURS ?? "3");
 const nonCriticalStatusWriteIntervalMin = Number(process.env.NON_CRITICAL_STATUS_WRITE_INTERVAL_MIN ?? "1");
+const requestStuckTimeoutMs = Number(process.env.REQUEST_STUCK_TIMEOUT_MS ?? "60000");
+const quietHoursStart = Number(process.env.QUIET_HOURS_START ?? "22");
+const quietHoursEnd = Number(process.env.QUIET_HOURS_END ?? "7");
+const nightIntervalMultiplier = Number(process.env.NIGHT_INTERVAL_MULTIPLIER ?? "60");
 let intTime = Number(process.env.CHECK_INTERVAL_MS ?? "20000");
 let urlPast: boolean[] = [];
 let targetIdMap = new Map<string, number>();
@@ -25,8 +29,9 @@ function nowMoscowString(): string {
 function nextCycleMs(): number {
   const hour = DateTime.local().setZone("Europe/Moscow").hour;
   intTime = Number(process.env.CHECK_INTERVAL_MS ?? "20000");
-  if (hour >= 22 || hour < 7) {
-    intTime = intTime * 3 * 20;
+  const isQuietHours = hour >= quietHoursStart || hour < quietHoursEnd;
+  if (isQuietHours) {
+    intTime = intTime * nightIntervalMultiplier;
   }
   return intTime;
 }
@@ -114,7 +119,12 @@ async function sentUser(msg: string, status: number, updDP: boolean, target: Run
       message: msg
     });
   }
-  logger.info("Status registered", { target: target.name, status: statusType, message: msg });
+  logger.info("Status registered", {
+    target: target.name,
+    status: statusType,
+    message: msg,
+    at: DateTime.local().setZone("Europe/Moscow").toFormat("yy-LL-dd HH:mm:ss")
+  });
   target.stage = status;
   if (updDP) {
     datePast = dateNow;
@@ -224,6 +234,10 @@ async function puppeteerDebug(target: RuntimeTarget): Promise<void> {
 
 async function checkURL(target: RuntimeTarget): Promise<void> {
   try {
+    if (target.requested) {
+      logger.info("checkURL skipped: request already in progress", { target: target.name, at: nowMoscowString() });
+      return;
+    }
     target.lastRequestedTimeBeforeUpdate = target.requestedTime;
     target.requestedTime = dateNow;
 
@@ -235,9 +249,7 @@ async function checkURL(target: RuntimeTarget): Promise<void> {
       ) / 100;
     }
 
-    if (!target.requested || target.intMin >= msgMinValue) {
-      await puppeteerDebug(target);
-    }
+    await puppeteerDebug(target);
   } catch (error) {
     logger.error("error_checkURL", { dateNow, target: target.name, error: String(error) });
     await sentUser(`error_checkURL : ${dateNow}`, 1, true, target);
@@ -272,10 +284,18 @@ async function checkSelect(target: RuntimeTarget): Promise<void> {
   }
 }
 
+
+// главный цикл планировщика.
+// ставит текущий таймштамп цикла, проходит по всем таргетам и решает, кому запускать checkURL(),
+// контролирует «застревание» через requested + timeout, запускает очистку старых логов,
+// и в конце планирует следующий запуск setTimeout(..., nextCycleMs())
 async function checkSite(targets: RuntimeTarget[]): Promise<void> {
   let text = "";
   dateNow = nowMoscowString();
   try {
+    const nextMs = nextCycleMs();
+    logger.info("Check cycle tick", { at: dateNow, nextCycleMs: nextMs });
+
     for (let i = 0; i < targets.length; i += 1) {
       if (urlPast[i] && !targets[i].waitForSelector) {
         text += `${targets[i].name} : ${urlPast[i]}; `;
@@ -283,19 +303,25 @@ async function checkSite(targets: RuntimeTarget[]): Promise<void> {
       urlPast[i] = targets[i].requested;
     }
 
-    if (datePast) {
+    if (datePast) { // нужен как глобальная метка времени последнего “значимого” события, чтобы считать intHour (сколько часов прошло) и не слать/не писать одинаковые не-критичные статусы слишком часто.
       intHour = Math.round(
         DateTime.fromISO(dateNow.replace(" ", "T")).diff(DateTime.fromISO(datePast.replace(" ", "T")), "hours").hours * 100
       ) / 100;
     }
 
     for (let i = 0; i < targets.length; i += 1) {
-      targets[i].intMin = Math.round(
-        DateTime.fromISO(dateNow.replace(" ", "T"))
-          .diff(DateTime.fromISO(targets[i].requestedTime.replace(" ", "T")), "minutes")
-          .minutes * 100
-      ) / 100;
-      if (!targets[i].requested || targets[i].intMin >= msgMinValue + 2) {
+      const elapsedMs = DateTime.fromISO(dateNow.replace(" ", "T"))
+        .diff(DateTime.fromISO(targets[i].requestedTime.replace(" ", "T")), "milliseconds")
+        .milliseconds;
+      if (targets[i].requested && elapsedMs >= requestStuckTimeoutMs) {
+        logger.error("Request stuck timeout reached, forcing unlock", {
+          target: targets[i].name,
+          elapsedMs: Math.round(elapsedMs),
+          timeoutMs: requestStuckTimeoutMs
+        });
+        targets[i].requested = false;
+      }
+      if (!targets[i].requested) {
         setTimeout(() => void checkURL(targets[i]), 1000 * i);
       }
     }
@@ -307,7 +333,8 @@ async function checkSite(targets: RuntimeTarget[]): Promise<void> {
     logger.error("error_checkSite", { dateNow, error: String(error) });
     await sentUser(`error_checkSite : ${dateNow}`, 1, true, targets[0]);
   } finally {
-    setTimeout(() => void checkSite(targets), nextCycleMs());
+    const nextMs = nextCycleMs();
+    setTimeout(() => void checkSite(targets), nextMs);
   }
 }
 
