@@ -6,7 +6,6 @@ export type OutboundStatus = "pending" | "sent" | "failed";
 interface OutboundPostRequestAttributes {
   id: number;
   target_id: number;
-  url: string;
   req_body: Record<string, unknown> | null;
   res_body: Record<string, unknown> | null;
   http_status: number | null;
@@ -27,7 +26,6 @@ export class OutboundPostRequest
 {
   declare id: number;
   declare target_id: number;
-  declare url: string;
   declare req_body: Record<string, unknown> | null;
   declare res_body: Record<string, unknown> | null;
   declare http_status: number | null;
@@ -41,7 +39,6 @@ OutboundPostRequest.init(
   {
     id: { type: DataTypes.BIGINT.UNSIGNED, autoIncrement: true, primaryKey: true },
     target_id: { type: DataTypes.BIGINT.UNSIGNED, allowNull: false },
-    url: { type: DataTypes.STRING(512), allowNull: false },
     req_body: { type: DataTypes.JSON, allowNull: true },
     res_body: { type: DataTypes.JSON, allowNull: true },
     http_status: { type: DataTypes.SMALLINT, allowNull: true },

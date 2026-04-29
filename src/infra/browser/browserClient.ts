@@ -5,38 +5,154 @@ import { logger } from "../logging/logger";
 export interface RuntimeTarget extends MonitorTarget {
   page?: Page;
   lastRequestedTimeBeforeUpdate?: string;
+  /** Московское время последней строки ResourceStatusLog по этому таргету */
+  lastStatusDbLoggedAt?: string;
+  /** Простая state-machine доступности, чтобы не слать противоречивые алерты подряд */
+  availabilityState?: "up" | "down";
+  /** Антидребезг пользовательских уведомлений */
+  lastAlertMessage?: string;
+  lastAlertStatus?: number;
+  /** Пер-таргет интервал отправки (чтобы один таргет не глушил другой) */
+  lastUserNotifyAt?: string;
+  /** Подавление частых дублей одной и той же ошибки */
+  lastErrorSignature?: string;
+  /** VGIK: страница на паузе из‑за Cloudflare / проверки человека — без reload до прохождения */
+  vgikCfChallengePaused?: boolean;
+  /** VGIK: одноразовое уведомление о паузе по Cloudflare на инцидент */
+  vgikCfChallengeNotifySent?: boolean;
 }
 
 export class BrowserClient {
   private browser?: Browser;
 
-  async connect(): Promise<void> {
+  private normalizeMatchKey(url: string): string {
+    try {
+      const u = new URL(url);
+      return `${u.host}${u.pathname}`.replace(/\/+$/, "");
+    } catch {
+      return url.replace(/\/+$/, "");
+    }
+  }
+
+  private pageMatchesTarget(pageUrl: string, targetUrl: string): boolean {
+    if (pageUrl.includes(targetUrl)) {
+      return true;
+    }
+    return this.normalizeMatchKey(pageUrl) === this.normalizeMatchKey(targetUrl);
+  }
+
+  // Безопасно читаем URL вкладки: некоторые вкладки сразу после connect ещё без main frame.
+  private safeGetPageUrl(page: Page): string {
+    try {
+      const targetUrl = page.target().url();
+      if (targetUrl) {
+        return targetUrl;
+      }
+    } catch {
+      // ignore and fallback below
+    }
+    try {
+      return page.url();
+    } catch (error) {
+      logger.info("Skip tab URL read: main frame not ready yet", { error: String(error) });
+      return "";
+    }
+  }
+
+  private isNetworkEnableTimeout(error: unknown): boolean {
+    return String(error).includes("Network.enable timed out");
+  }
+
+  private async reconnect(): Promise<void> {
+    try {
+      await this.browser?.disconnect();
+    } catch {
+      // ignore reconnect cleanup errors
+    }
     this.browser = await puppeteer.connect({
       browserURL: process.env.BROWSER_URL ?? "http://127.0.0.1:9222",
-      protocolTimeout: Number(process.env.BROWSER_PROTOCOL_TIMEOUT_MS ?? "60000")
+      protocolTimeout: Number(process.env.BROWSER_PROTOCOL_TIMEOUT_MS ?? "180000")
     });
+  }
+
+  async connect(): Promise<void> {
+    const attempts = Math.max(1, Number(process.env.BROWSER_CONNECT_RETRIES ?? "3"));
+    let lastError: unknown;
+    for (let i = 1; i <= attempts; i += 1) {
+      try {
+        this.browser = await puppeteer.connect({
+          browserURL: process.env.BROWSER_URL ?? "http://127.0.0.1:9222",
+          protocolTimeout: Number(process.env.BROWSER_PROTOCOL_TIMEOUT_MS ?? "180000")
+        });
+        return;
+      } catch (error) {
+        lastError = error;
+        logger.error("Browser connect failed", { attempt: i, attempts, error: String(error) });
+        if (i < attempts) {
+          await new Promise((resolve) => setTimeout(resolve, 1500));
+        }
+      }
+    }
+    throw lastError instanceof Error ? lastError : new Error(String(lastError));
   }
 
   async bindPages(targets: RuntimeTarget[]): Promise<void> {
     if (!this.browser) {
       throw new Error("Browser is not connected");
     }
-    const pages = await this.browser.pages();
+    let pages: Page[] = [];
+    try {
+      pages = await this.browser.pages();
+    } catch (error) {
+      if (!this.isNetworkEnableTimeout(error)) {
+        throw error;
+      }
+      logger.error("browser.pages failed with Network.enable timeout, reconnecting", {
+        error: String(error)
+      });
+      await this.reconnect();
+      if (!this.browser) {
+        throw new Error("Browser reconnect failed");
+      }
+      pages = await this.browser.pages();
+    }
 
     for (const target of targets) {
       for (const page of pages) {
-        if (page.url().includes(target.url)) {
+        const pageUrl = this.safeGetPageUrl(page);
+        if (!pageUrl) {
+          // Пропускаем вкладки, которые ещё не инициализировались после attach.
+          continue;
+        }
+        const matched = this.pageMatchesTarget(pageUrl, target.url);
+        if (matched) {
           target.page = page;
           break;
         }
       }
       if (!target.page) {
-        target.page = await this.browser.newPage();
+        try {
+          target.page = await this.browser.newPage();
+        } catch (error) {
+          if (!this.isNetworkEnableTimeout(error)) {
+            throw error;
+          }
+          logger.error("newPage failed with Network.enable timeout, reconnecting", {
+            target: target.name,
+            error: String(error)
+          });
+          await this.reconnect();
+          if (!this.browser) {
+            throw new Error("Browser reconnect failed");
+          }
+          target.page = await this.browser.newPage();
+        }
         try {
           await target.page.goto(target.url, {
             waitUntil: "networkidle2",
-            timeout: Number(process.env.BROWSER_PAGE_GOTO_TIMEOUT_MS ?? "30000")
+            timeout: Number(process.env.BROWSER_PAGE_GOTO_TIMEOUT_MS ?? "20000")
           });
+          logger.info("Initial page navigated", { target: target.name, action: "goto", url: target.url });
         } catch (error) {
           logger.error("Initial goto failed", {
             target: target.name,
@@ -46,5 +162,46 @@ export class BrowserClient {
         }
       }
     }
+  }
+
+  async rebindGitisTargetPage(target: RuntimeTarget): Promise<boolean> {
+    if (!this.browser || target.theaterId !== "GITIS") {
+      return false;
+    }
+    let pages: Page[] = [];
+    try {
+      pages = await this.browser.pages();
+    } catch (error) {
+      if (!this.isNetworkEnableTimeout(error)) {
+        logger.error("rebindGitisTargetPage: browser.pages failed", {
+          target: target.name,
+          error: String(error)
+        });
+        return false;
+      }
+      logger.error("rebindGitisTargetPage: Network.enable timeout, reconnecting", {
+        target: target.name,
+        error: String(error)
+      });
+      await this.reconnect();
+      if (!this.browser) {
+        return false;
+      }
+      pages = await this.browser.pages();
+    }
+
+    for (const page of pages) {
+      const pageUrl = this.safeGetPageUrl(page);
+      if (!pageUrl) {
+        // На ребинде тоже не падаем из-за "Requesting main frame too early".
+        continue;
+      }
+      const matched = this.pageMatchesTarget(pageUrl, target.url);
+      if (matched) {
+        target.page = page;
+        return true;
+      }
+    }
+    return false;
   }
 }

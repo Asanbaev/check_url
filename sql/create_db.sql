@@ -52,7 +52,6 @@ CREATE TABLE IF NOT EXISTS `status_log` (
 CREATE TABLE IF NOT EXISTS `request` (
   `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
   `target_id` BIGINT UNSIGNED NOT NULL,
-  `url` VARCHAR(512) NOT NULL,
   `req_body` JSON NULL,
   `res_body` JSON NULL,
   `http_status` SMALLINT NULL,

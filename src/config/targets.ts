@@ -13,8 +13,7 @@ export interface MonitorTarget {
   requestedTime: string;
   stage: number;
   datePast?: string;
-  intHour: number;
-  intMin: number;
+  msgElapsedHours: number;
 }
 
 export const targets: MonitorTarget[] = [
@@ -29,8 +28,7 @@ export const targets: MonitorTarget[] = [
     requested: false,
     requestedTime: "2025-04-01 15:00:00",
     stage: 0,
-    intHour: 3,
-    intMin: 3
+    msgElapsedHours: 3
   },
   {
     name: "GITIS_Блохин",
@@ -43,8 +41,7 @@ export const targets: MonitorTarget[] = [
     requested: false,
     requestedTime: "2025-04-01 15:00:00",
     stage: 0,
-    intHour: 3,
-    intMin: 3
+    msgElapsedHours: 3
   },
   {
     name: "GITIS_Кудряшов",
@@ -57,106 +54,98 @@ export const targets: MonitorTarget[] = [
     requested: false,
     requestedTime: "2025-02-01 15:00:00",
     stage: 0,
-    intHour: 3,
-    intMin: 3
+    msgElapsedHours: 3
   },
-  {
-    name: "VGIK_Май",
+  { // есть по опции 3 статуса: 1-поиск мая, 2-поиск ссылок более какой то цифры, задаётся по ссылке, найди max и укажи   3.пытается отправить POST
+    name: "VGIK_New",
     theaterId: "VGIK",
-    enabled: false,
+    enabled: true,
     url: "https://vgik.info/abiturient/higher/spetsialitet/aktyerskiy-fakultet/",
     searchText: " мая ",
     searchMode: "not_contains",
     waitForSelector: false,
     requested: false,
-    requestedTime: "2025-04-01 15:00:00",
+    requestedTime: "2026-04-01 15:00:00",
     stage: 0,
-    intHour: 3,
-    intMin: 2
+    msgElapsedHours: 3
   },
   {
-    name: "VGIK_Грамматиков_06",
+    name: "VGIK_Мерзликин_13",
     theaterId: "VGIK",
-    enabled: false,
-    url: "https://priemvgik.timepad.ru/event/3349852/",
+    enabled: true,
+    url: "https://priemvgik.timepad.ru/event/3951178/",
     searchText: "регистрация на предварительное прослушивание закрыта, так как все места уже заняты!",
     searchMode: "contains",
     waitForSelector: true,
     requested: false,
     requestedTime: "2025-02-01 15:00:00",
     stage: 0,
-    intHour: 3,
-    intMin: 3
+    msgElapsedHours: 3
   },
   {
-    name: "VGIK_Грамматиков_15",
+    name: "VGIK_Мерзликин_12",
     theaterId: "VGIK",
-    enabled: false,
-    url: "https://priemvgik.timepad.ru/event/3349855/",
+    enabled: true,
+    url: "https://priemvgik.timepad.ru/event/3951176/",
     searchText: "регистрация на предварительное прослушивание закрыта, так как все места уже заняты!",
     searchMode: "contains",
     waitForSelector: true,
     requested: false,
     requestedTime: "2025-02-01 15:00:00",
     stage: 0,
-    intHour: 3,
-    intMin: 3
+    msgElapsedHours: 3
   },
   {
-    name: "VGIK_Грамматиков_16",
+    name: "VGIK_Мерзликин_15",
     theaterId: "VGIK",
-    enabled: false,
-    url: "https://priemvgik.timepad.ru/event/3349863/",
+    enabled: true,
+    url: "https://priemvgik.timepad.ru/event/3951179/",
     searchText: "регистрация на предварительное прослушивание закрыта, так как все места уже заняты!",
     searchMode: "contains",
     waitForSelector: true,
     requested: false,
     requestedTime: "2025-02-01 15:00:00",
     stage: 0,
-    intHour: 3,
-    intMin: 3
+    msgElapsedHours: 3
   },
   {
-    name: "VGIK_Вдовиченков_12",
+    name: "VGIK_Мерзликин_20",
     theaterId: "VGIK",
-    enabled: false,
-    url: "https://priemvgik.timepad.ru/event/3320951/",
+    enabled: true,
+    url: "https://priemvgik.timepad.ru/event/3951181/",
     searchText: "регистрация на предварительное прослушивание закрыта, так как все места уже заняты!",
     searchMode: "contains",
     waitForSelector: true,
     requested: false,
     requestedTime: "2025-02-01 15:00:00",
     stage: 0,
-    intHour: 3,
-    intMin: 3
+    msgElapsedHours: 3
   },
   {
-    name: "VGIK_Вдовиченков_22",
+    name: "VGIK_Федорова_7",
     theaterId: "VGIK",
-    enabled: false,
-    url: "https://priemvgik.timepad.ru/event/3349795/",
+    enabled: true,
+    url: "https://priemvgik.timepad.ru/event/3951188/",
     searchText: "регистрация на предварительное прослушивание закрыта, так как все места уже заняты!",
     searchMode: "contains",
     waitForSelector: true,
     requested: false,
     requestedTime: "2025-02-01 15:00:00",
     stage: 0,
-    intHour: 3,
-    intMin: 3
+    msgElapsedHours: 3
   },
   {
-    name: "VGIK_Вдовиченков_23",
+    name: "VGIK_Федорова_14",
     theaterId: "VGIK",
-    enabled: false,
-    url: "https://priemvgik.timepad.ru/event/3349816/",
+    enabled: true,
+    url: "https://priemvgik.timepad.ru/event/3951191/",
     searchText: "регистрация на предварительное прослушивание закрыта, так как все места уже заняты!",
     searchMode: "contains",
     waitForSelector: true,
     requested: false,
     requestedTime: "2025-02-01 15:00:00",
     stage: 0,
-    intHour: 3,
-    intMin: 3
+    msgElapsedHours: 3
   },
   {
     name: "VGIK_Вдовиченков_30",
@@ -169,8 +158,7 @@ export const targets: MonitorTarget[] = [
     requested: false,
     requestedTime: "2025-02-01 15:00:00",
     stage: 0,
-    intHour: 3,
-    intMin: 3
+    msgElapsedHours: 3
   },
   {
     name: "VGIK_Вдовиченков_25",
@@ -183,8 +171,7 @@ export const targets: MonitorTarget[] = [
     requested: false,
     requestedTime: "2025-02-01 15:00:00",
     stage: 0,
-    intHour: 3,
-    intMin: 2
+    msgElapsedHours: 3
   },
   {
     name: "rgsi_Смирнов",
@@ -197,8 +184,7 @@ export const targets: MonitorTarget[] = [
     requested: false,
     requestedTime: "2025-04-01 15:00:00",
     stage: 0,
-    intHour: 3,
-    intMin: 3
+    msgElapsedHours: 3
   },
   {
     name: "rgsi_Стукалов",
@@ -211,7 +197,6 @@ export const targets: MonitorTarget[] = [
     requested: false,
     requestedTime: "2025-04-01 15:00:00",
     stage: 0,
-    intHour: 3,
-    intMin: 3
+    msgElapsedHours: 3
   }
 ];
