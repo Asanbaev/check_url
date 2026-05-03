@@ -1,8 +1,7 @@
 import axios from "axios";
-import { QueryTypes } from "sequelize";
 import { OutboundPostRequest } from "../db/outboundPostRequest.model";
 import { ResourceStatus } from "../db/resourceStatusLog.model";
-import { sequelize } from "../db/sequelize";
+import { logger } from "../logging/logger";
 import { moscowWallClockLiteralForDb } from "../time/moscowDb";
 
 export interface PublishAlertInput {
@@ -15,12 +14,18 @@ export interface PublishAlertInput {
   telegramParseMode?: "HTML";
 }
 
-async function loadEnabledTgChatIdsFromCheckUrlDb(): Promise<string[]> {
-  const rows = (await sequelize.query(
-    "SELECT telegram_id FROM `user` WHERE enabled = 1 ORDER BY id ASC",
-    { type: QueryTypes.SELECT }
-  )) as Array<{ telegram_id: string | number | null }>;
-  return rows.map((r) => String(r.telegram_id ?? "").trim()).filter((id) => id.length > 0);
+/** Вадим — все алерты; Софья — только key_false (дополнительно, если id отличается от Vadim). */
+function resolveRecipientChatIds(status: ResourceStatus): string[] {
+  const vadim = (process.env.TG_CHAT_ID_VADIM ?? "").trim();
+  const sofa = (process.env.TG_CHAT_ID_SOFA ?? "").trim();
+  const ids: string[] = [];
+  if (vadim.length > 0) {
+    ids.push(vadim);
+  }
+  if (status === "key_false" && sofa.length > 0 && sofa !== vadim) {
+    ids.push(sofa);
+  }
+  return ids;
 }
 
 export async function publishAlert(input: PublishAlertInput): Promise<void> {
@@ -29,33 +34,22 @@ export async function publishAlert(input: PublishAlertInput): Promise<void> {
     return;
   }
 
-  let tgChatIds: string[] = [];
-  try {
-    tgChatIds = await loadEnabledTgChatIdsFromCheckUrlDb();
-  } catch (error) {
-    const moscowDt = moscowWallClockLiteralForDb();
-    const outbound = await OutboundPostRequest.create({
-      target_id: input.targetId,
-      req_body: { action: "load_enabled_recipients_from_check_url_db" },
-      status: "failed",
-      created_at: moscowDt,
-      updated_at: moscowDt
-    });
-    outbound.error_text = `enabled_recipients_load_failed: ${String(error)}`;
-    await outbound.save();
-    return;
-  }
+  const tgChatIds = resolveRecipientChatIds(input.status);
 
   if (tgChatIds.length === 0) {
+    logger.info("publishAlert: нет получателей (TG_CHAT_ID_VADIM обязателен; при key_false добавляется TG_CHAT_ID_SOFA)", {
+      target: input.targetName,
+      status: input.status
+    });
     const moscowDt = moscowWallClockLiteralForDb();
     const outbound = await OutboundPostRequest.create({
       target_id: input.targetId,
-      req_body: { action: "load_enabled_recipients_from_check_url_db", result: "empty" },
+      req_body: { action: "resolve_recipients", result: "empty", status: input.status },
       status: "failed",
       created_at: moscowDt,
       updated_at: moscowDt
     });
-    outbound.error_text = "no_enabled_recipients_in_check_url_db";
+    outbound.error_text = "no_recipients_from_env";
     await outbound.save();
     return;
   }

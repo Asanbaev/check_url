@@ -1,7 +1,7 @@
 import { DateTime } from "luxon";
 import { Op, literal } from "sequelize";
 import { moscowWallClockLiteralForDb } from "../infra/time/moscowDb";
-import { MonitorTarget } from "../config/targets";
+import { MonitorTarget, targetDisplayLabel } from "../config/targets";
 import { runGitisPipeline } from "./gitisModule";
 import {
   isVgikMaiFacultyPage,
@@ -26,9 +26,9 @@ const statusDbLogIntervalMin = Math.max(
   0,
   Number(process.env.STATUS_DB_LOG_INTERVAL_MIN ?? "5") || 5
 );
-/** Полный HTML страницы в outputs/ при статусе key_false (см. KEY_FALSE_SAVE_FULL_PAGE_HTML в .env). */
+/** Полный HTML страницы в outputs/ при статусе key_false (см. SAVE_PAGE_HTML в .env). */
 const keyFalseSaveFullPageHtml =
-  process.env.KEY_FALSE_SAVE_FULL_PAGE_HTML === "1" || process.env.KEY_FALSE_SAVE_FULL_PAGE_HTML === "true";
+  process.env.SAVE_PAGE_HTML === "1" || process.env.SAVE_PAGE_HTML === "true";
 const requestStuckTimeoutMs = Number(process.env.REQUEST_STUCK_TIMEOUT_MS ?? "60000");
 const pageGotoTimeoutMs = Number(process.env.BROWSER_PAGE_GOTO_TIMEOUT_MS ?? "20000");
 const vgikMaiMode = Number(process.env.VGIK_MAI_MODE ?? "1");
@@ -71,42 +71,30 @@ function nextCycleMs(): number {
   return intTime;
 }
 
-function detectStatusType(msg: string): ResourceStatus {
-  if (msg.includes("Дату не нашёл")) {// по факту это например не открылось модальное окно 
-    return "key_error";
-  }
-  if (msg.includes("error_puppeteerDebug")) {
-    return "unreachable";
-  }
-  if (msg.includes("Требуется авторизация")) {
-    return "auth";
-  }
-  if (msg.includes("Похоже есть свободные даты") || msg.includes("открыта регистрация")) {
-    return "key_false";
-  }
-  if (msg.includes("недоступен")) {
-    return "unreachable";
-  }
-  if (msg.includes("Ошибка") || msg.includes("error_")) {
-    return "error";
-  }
-  if (msg.includes("Cloudflare")) {
-    return "error";
-  }
-  return "key_ok";
-}
-
 /** Для Telegram Bot API parse_mode=HTML (видимые символы <>&) */
 function escapeTelegramHtmlPlain(s: string): string {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
-/** Сообщение с подставленными HTML-тегами из monitor оставляем; иначе оборачиваем в <pre> с экранированием */
+function escapeTelegramHtmlAttr(s: string): string {
+  return escapeTelegramHtmlPlain(s).replace(/"/g, "&quot;");
+}
+
+/** Сообщение с подставленными HTML-тегами из monitor оставляем; иначе экранируем как обычный текст */
 function bodyForTelegramHtmlMode(msg: string): string {
   if (/<[a-z]/i.test(msg) && /<\/[a-z]/i.test(msg)) {
     return msg;
   }
-  return `<pre>${escapeTelegramHtmlPlain(msg)}</pre>`;
+  return escapeTelegramHtmlPlain(msg);
+}
+
+function clickableTelegramMessage(msg: string, targetUrl: string, telegramParseMode?: "HTML"): string {
+  const url = targetUrl.trim();
+  if (!url) {
+    return telegramParseMode === "HTML" ? bodyForTelegramHtmlMode(msg) : escapeTelegramHtmlPlain(msg);
+  }
+  const body = telegramParseMode === "HTML" ? bodyForTelegramHtmlMode(msg) : escapeTelegramHtmlPlain(msg);
+  return `<a href="${escapeTelegramHtmlAttr(url)}">${body}</a>`;
 }
 
 function isBrowserErrorPage(content: string): boolean {
@@ -135,7 +123,7 @@ async function writeStatusLog(target: RuntimeTarget, status: ResourceStatus, det
   const targetId = targetIdMap.get(target.url);
   if (!targetId) {
     logger.error("writeStatusLog: target_id not found for url (status_log not written)", {
-      target: target.name,
+      target: targetDisplayLabel(target),
       url: target.url
     });
     return false;
@@ -153,7 +141,7 @@ async function writeStatusLog(target: RuntimeTarget, status: ResourceStatus, det
     return true;
   } catch (error) {
     logger.error("writeStatusLog: insert failed", {
-      target: target.name,
+      target: targetDisplayLabel(target),
       url: target.url,
       error: String(error)
     });
@@ -161,7 +149,7 @@ async function writeStatusLog(target: RuntimeTarget, status: ResourceStatus, det
   }
 }
 
-/** Запись в БД не чаще чем STATUS_DB_LOG_INTERVAL_MIN (на таргет). */
+/** Запись в БД не чаще чем STATUS_DB_LOG_INTERVAL_MIN (на таргет). Исключение: `key_false` — пишем всегда, без ожидания интервала. */
 async function writeStatusLogIfDue(
   target: RuntimeTarget,
   status: ResourceStatus,
@@ -169,11 +157,12 @@ async function writeStatusLogIfDue(
 ): Promise<boolean> {
   const nowIso = nowMoscowString();
   const last = target.lastStatusDbLoggedAt;
-  if (last) {
+  const bypassInterval = status === "key_false";
+  if (last && !bypassInterval) {
     const tNow = parseMoscowTimestamp(nowIso);
     const tLast = parseMoscowTimestamp(last);
     if (!tNow.isValid || !tLast.isValid) {
-      logger.error("writeStatusLogIfDue: invalid timestamp for interval", { nowIso, last, target: target.name });
+      logger.error("writeStatusLogIfDue: invalid timestamp for interval", { nowIso, last, target: targetDisplayLabel(target) });
     } else {
       const elapsedMin = Math.round(tNow.diff(tLast, "minutes").minutes * 100) / 100;
       if (elapsedMin < statusDbLogIntervalMin) {
@@ -207,74 +196,55 @@ async function cleanupOldStatusLogs(): Promise<void> {
 
 async function sentUser(
   msg: string,
-  status: number,
+  stage: number,
   updDP: boolean,
   target: RuntimeTarget,
+  resourceStatus: ResourceStatus,
   telegramParseMode?: "HTML"
 ): Promise<void> {
-  const statusType = detectStatusType(msg);
+  await writeStatusLogIfDue(target, resourceStatus, msg);
 
-  await writeStatusLogIfDue(target, statusType, msg);
-
-  if (keyFalseSaveFullPageHtml && statusType === "key_false" && target.page) {
+  if (keyFalseSaveFullPageHtml && resourceStatus === "key_false" && target.page) {
     try {
       const snap = await target.page.content();
-      const savedPath = await saveHtmlSnapshot("key_false", target.name, snap);
-      logger.info("Saved key_false html snapshot", { target: target.name, path: savedPath });
+      const savedPath = await saveHtmlSnapshot("key_false", targetDisplayLabel(target), snap);
+      logger.info("Saved key_false html snapshot", { target: targetDisplayLabel(target), path: savedPath });
     } catch (error) {
-      logger.error("key_false html snapshot failed", { target: target.name, error: String(error) });
+      logger.error("key_false html snapshot failed", { target: targetDisplayLabel(target), error: String(error) });
     }
-  } else if (keyFalseSaveFullPageHtml && statusType === "key_false" && !target.page) {
-    logger.error("key_false html snapshot skipped: no page handle", { target: target.name });
+  } else if (keyFalseSaveFullPageHtml && resourceStatus === "key_false" && !target.page) {
+    logger.error("key_false html snapshot skipped: no page handle", { target: targetDisplayLabel(target) });
   }
 
-  const sameStatusAsBefore = target.stage === status;
   const intervalDue = elapsedHoursFrom(target.lastUserNotifyAt) >= msgMinValue;
-  const exactDuplicate = target.lastAlertStatus === status && target.lastAlertMessage === msg;
-  const errorSignature = status === 1 ? msg.replace(/\s+/g, " ").trim() : undefined;
-  const sameErrorSignature = status === 1 && target.lastErrorSignature === errorSignature;
-  // Повтор того же текста/статуса допускаем после истечения интервала (MSG_MIN_HOURS).
-  const shouldNotify =
-    (!sameStatusAsBefore || intervalDue) &&
-    (!exactDuplicate || intervalDue) &&
-    !(sameErrorSignature && !intervalDue);
+  const sameResourceStatusAsLastNotify = target.lastAlertResourceStatus === resourceStatus;
+  const shouldNotify = !sameResourceStatusAsLastNotify || intervalDue;
 
   if (shouldNotify) {
     const targetId = targetIdMap.get(target.url);
-    const telegramMessage = telegramParseMode === "HTML" ? bodyForTelegramHtmlMode(msg) : msg;
+    const telegramMessage = clickableTelegramMessage(msg, target.url, telegramParseMode);
     if (targetId) {
       await publishAlert({
         targetId,
-        targetName: target.name,
+        targetName: targetDisplayLabel(target),
         targetUrl: target.url,
-        status: statusType,
+        status: resourceStatus,
         message: telegramMessage,
-        telegramParseMode: telegramParseMode === "HTML" ? "HTML" : undefined
+        telegramParseMode: "HTML"
       });
     }
-    target.lastAlertStatus = status;
-    target.lastAlertMessage = msg;
+    target.lastAlertResourceStatus = resourceStatus;
     target.lastUserNotifyAt = nowMoscowString();
-    if (status === 1 && errorSignature) {
-      target.lastErrorSignature = errorSignature;
-    }
   } else {
-    logger.info("Notify suppressed (same status / duplicate)", {
-      target: target.name,
-      status,
+    logger.info("Notify suppressed (same resourceStatus / interval)", {
+      target: targetDisplayLabel(target),
+      resourceStatus,
       stageBefore: target.stage,
-      intervalDue,
-      exactDuplicate,
-      sameErrorSignature
+      intervalDue
     });
   }
-  logger.info("Status registered", {
-    target: target.name,
-    status: statusType,
-    message: msg,
-    at: DateTime.local().setZone("Europe/Moscow").toFormat("yy-LL-dd HH:mm:ss")
-  });
-  target.stage = status;
+  logger.info(`Status registered ${targetDisplayLabel(target)} ${resourceStatus} ${msg}`);
+  target.stage = stage;
   if (updDP) {
     datePast = dateNow;
   }
@@ -286,27 +256,26 @@ async function sentUser(
 async function sendTelegramStepNotification(
   target: RuntimeTarget,
   msg: string,
-  telegramParseMode?: "HTML"
+  resourceStatus: ResourceStatus
 ): Promise<void> {
   const targetId = targetIdMap.get(target.url);
   if (!targetId) {
-    logger.error("sendTelegramStepNotification: target_id not found", { target: target.name, url: target.url });
+    logger.error("sendTelegramStepNotification: target_id not found", { target: targetDisplayLabel(target), url: target.url });
     return;
   }
-  const telegramMessage = telegramParseMode === "HTML" ? bodyForTelegramHtmlMode(msg) : msg;
   await publishAlert({
     targetId,
-    targetName: target.name,
+    targetName: targetDisplayLabel(target),
     targetUrl: target.url,
-    status: detectStatusType(msg),
-    message: telegramMessage,
-    telegramParseMode: telegramParseMode === "HTML" ? "HTML" : undefined
+    status: resourceStatus,
+    message: clickableTelegramMessage(msg, target.url),
+    telegramParseMode: "HTML"
   });
 }
 
 async function puppeteerDebug(target: RuntimeTarget): Promise<void> {
   if (!target.page) {
-    throw new Error(`Page is not initialized for ${target.name}`);
+    throw new Error(`Page is not initialized for ${targetDisplayLabel(target)}`);
   }
   try {
     target.requested = true;
@@ -325,7 +294,7 @@ async function puppeteerDebug(target: RuntimeTarget): Promise<void> {
       target.vgikCfChallengePaused = false;
       target.vgikCfChallengeNotifySent = false;
       skipReload = true;
-      logger.info("VGIK Cloudflare: пауза снята, контент без маркера проверки", { target: target.name });
+      logger.info("VGIK Cloudflare: пауза снята, контент без маркера проверки", { target: targetDisplayLabel(target) });
     }
 
     if (!skipReload) {
@@ -335,19 +304,10 @@ async function puppeteerDebug(target: RuntimeTarget): Promise<void> {
           waitUntil: "networkidle2",
           timeout: Number(process.env.BROWSER_PAGE_GOTO_TIMEOUT_MS ?? "20000")
         });
-        logger.info("Page navigated", {
-          target: target.name,
-          action: "goto",
-          intendedUrl: target.url,
-          loadedUrl: target.page.url()
-        });
+        logger.info(`Page navigated ${targetDisplayLabel(target)}`);
       } else {
         await target.page.reload({ waitUntil: "networkidle2", timeout: 0 });
-        logger.info("Page navigated", {
-          target: target.name,
-          action: "reload",
-          url: target.page.url()
-        });
+        logger.info(`Page navigated ${targetDisplayLabel(target)}`);
       }
     }
 
@@ -357,10 +317,11 @@ async function puppeteerDebug(target: RuntimeTarget): Promise<void> {
         target.vgikCfChallengePaused = true;
         if (!target.vgikCfChallengeNotifySent) {
           await sentUser(
-            `${target.name}: показывается проверка Cloudflare — пройдите её в открытой вкладке; автообновление приостановлено до прохождения`,
+            `${targetDisplayLabel(target)}: Cloudflare`,
             0,
             true,
-            target
+            target,
+            "auth"
           );
           target.vgikCfChallengeNotifySent = true;
         }
@@ -386,16 +347,16 @@ async function puppeteerDebug(target: RuntimeTarget): Promise<void> {
           });
         }
       } catch (error) {
-        logger.error("error_puppeteerDebug не дождался", { dateNow, target: target.name, error: String(error) });
+        logger.error("error_puppeteerDebug не дождался", { dateNow, target: targetDisplayLabel(target), error: String(error) });
         exists = true;
       } finally {
         target.requested = false;
       }
 
       if (!exists) {
-        await sentUser(`${target.name}: проверь, похоже открыта регистрация !!!!`, 0, true, target);
+        await sentUser(`${targetDisplayLabel(target)}: проверь, похоже открыта регистрация !!!!`, 0, true, target, "key_false");
       } else if (target.msgElapsedHours >= msgMinValue || target.stage !== 0) {
-        await sentUser(`${target.name}: закрыто`, 0, true, target);
+        await sentUser(`${targetDisplayLabel(target)}: закрыто`, 0, true, target, "key_ok");
       }
       return;
     }
@@ -408,10 +369,11 @@ async function puppeteerDebug(target: RuntimeTarget): Promise<void> {
       target.vgikCfChallengePaused = true;
       if (!target.vgikCfChallengeNotifySent) {
         await sentUser(
-          `${target.name}: показывается проверка Cloudflare — пройдите её в открытой вкладке; автообновление приостановлено до прохождения`,
+          `${targetDisplayLabel(target)}: Cloudflare`,
           0,
           true,
-          target
+          target,
+          "auth"
         );
         target.vgikCfChallengeNotifySent = true;
       }
@@ -423,7 +385,7 @@ async function puppeteerDebug(target: RuntimeTarget): Promise<void> {
     let content = rawContent.toLowerCase();
     if (isBrowserErrorPage(content)) {
       target.availabilityState = "down";
-      await sentUser(`Сайт _${target.name}_ недоступен (browser_error_page)`, 1, true, target);
+      await sentUser(`Сайт _${targetDisplayLabel(target)}_ недоступен (browser_error_page)`, 1, true, target, "unreachable");
       return;
     }
     target.availabilityState = "up";
@@ -434,49 +396,50 @@ async function puppeteerDebug(target: RuntimeTarget): Promise<void> {
         const exclusiveFloor = Number.isFinite(rawMax) ? rawMax : 3931025;
         const timepadUrl = pickBestNewTimepadEventUrl(rawContent, exclusiveFloor);
         if (timepadUrl) {
-          await sentUser(`${target.name}: Найдена новая ссылка на май ${timepadUrl}`, 0, true, target, "HTML");
+          await sentUser(`${targetDisplayLabel(target)}: Найдена новая ссылка на май ${timepadUrl}`, 0, true, target, "key_false", "HTML");
           if (vgikMaiMode === 3 && target.page) {
-            runVgikMode3SubmitLoop(target.name, target.page, async (stepMsg) => {
-              await sendTelegramStepNotification(target, stepMsg);
+            runVgikMode3SubmitLoop(target.url, targetDisplayLabel(target), target.page, async (stepMsg) => {
+              const stepStatus: ResourceStatus = stepMsg.includes("ответ изменился") ? "key_false" : "key_ok";
+              await sendTelegramStepNotification(target, stepMsg, stepStatus);
             });
           }
           // const browser = target.page.browser();
           // if (browser) {
-          //   await runVgikMaiFacultyFlow(browser, rawContent, target.name);
+          //   await runVgikMaiFacultyFlow(browser, rawContent, targetDisplayLabel(target));
           // }
         } else if (msgElapsedHours >= msgMinValue || target.stage !== 0) {
-          await sentUser(`${target.name}: Новых дат на май пока нет`, 0, true, target, "HTML");
+          await sentUser(`${targetDisplayLabel(target)}: Новых дат на май пока нет`, 0, true, target, "key_ok");
         }
         return;
       }
       // const browser = target.page.browser();
       // if (browser) {
-      //   await runVgikMaiFacultyFlow(browser, rawContent, target.name);
+      //   await runVgikMaiFacultyFlow(browser, rawContent, targetDisplayLabel(target));
       // }
     }
 
     if (target.theaterId === "GITIS") {
-      const gitisResult = await runGitisPipeline(target.page, target.name);
+      const gitisResult = await runGitisPipeline(target.page, targetDisplayLabel(target));
       if (gitisResult.kind === "modal_missing") {
         if (wasDownBeforeCheck) {
-          await sentUser(`Сайт _${target.name}_ недоступен (browser_error_page)`, 1, true, target);
+          await sentUser(`Сайт _${targetDisplayLabel(target)}_ недоступен (browser_error_page)`, 1, true, target, "unreachable");
           return;
         }
-        await sentUser(gitisResult.message, 0, true, target);
+        await sentUser(gitisResult.message, 0, true, target, "key_error");
         const snap = await target.page.content();
-        const savedPath = await saveHtmlSnapshot("key_error", target.name, snap);
-        logger.info("Saved key_error html snapshot (.one-course missing)", { target: target.name, path: savedPath });
+        const savedPath = await saveHtmlSnapshot("key_error", targetDisplayLabel(target), snap);
+        logger.info("Saved key_error html snapshot (.one-course missing)", { target: targetDisplayLabel(target), path: savedPath });
         return;
       }
       if (gitisResult.kind === "registered_users_auth") {
-        await sentUser(gitisResult.message, 0, true, target);
+        await sentUser(gitisResult.message, 0, true, target, "auth");
         const snap = await target.page.content();
-        const savedPath = await saveHtmlSnapshot("auth", target.name, snap);
-        logger.info("Saved auth html snapshot", { target: target.name, path: savedPath });
+        const savedPath = await saveHtmlSnapshot("auth", targetDisplayLabel(target), snap);
+        logger.info("Saved auth html snapshot", { target: targetDisplayLabel(target), path: savedPath });
         return;
       }
       if (gitisResult.kind === "free_dates") {
-        await sentUser(gitisResult.message, gitisResult.statusCode, true, target);
+        await sentUser(gitisResult.message, gitisResult.statusCode, true, target, "key_false");
         return;
       }
       content = gitisResult.contentLowercase;
@@ -484,29 +447,35 @@ async function puppeteerDebug(target: RuntimeTarget): Promise<void> {
 
     if (content.indexOf(target.searchText.toLowerCase()) !== -1) {
       if (target.searchMode === "not_contains") {
-        await sentUser(`${target.name}: Поиск слова '${target.searchText}' положительный, открыли запись!!!, запускайте поиск ссылки !!`, 0, true, target);
+        await sentUser(
+          `${targetDisplayLabel(target)}: Поиск слова '${target.searchText}' положительный, открыли запись!!!, запускайте поиск ссылки !!`,
+          0,
+          true,
+          target,
+          "key_false"
+        );
       } else {
-        const msgNoFreeDates = `${target.name}: Свободных дат пока нет`;
-        await writeStatusLogIfDue(target, detectStatusType(msgNoFreeDates), msgNoFreeDates);
+        const msgNoFreeDates = `${targetDisplayLabel(target)}: Свободных дат пока нет`;
+        await writeStatusLogIfDue(target, "key_ok", msgNoFreeDates);
         if (msgElapsedHours >= msgMinValue || target.stage !== 0) {
-          await sentUser(msgNoFreeDates, 0, true, target);
+          await sentUser(msgNoFreeDates, 0, true, target, "key_ok");
         }
       }
     } else if (target.searchMode === "not_contains") {
-      const msgNotOpen = `${target.name}: Запись на<b><u>${target.searchText}</u></b>не открыта`;
-      await writeStatusLogIfDue(target, detectStatusType(msgNotOpen), msgNotOpen);
+      const msgNotOpen = `${targetDisplayLabel(target)}: Запись на<b><u>${target.searchText}</u></b>не открыта`;
+      await writeStatusLogIfDue(target, "key_ok", msgNotOpen);
       if (msgElapsedHours >= msgMinValue || target.stage !== 0) {
-        await sentUser(msgNotOpen, 0, true, target, "HTML");
+        await sentUser(msgNotOpen, 0, true, target, "key_ok", "HTML");
       }
     } else if (target.theaterId === "GITIS") {
-      await sentUser(`Дату не нашёл !! ${target.name}`, 0, true, target);
+      await sentUser(`Дату не нашёл !! ${targetDisplayLabel(target)}`, 0, true, target, "key_error");
       const snap = await target.page.content();
-      const savedPath = await saveHtmlSnapshot("key_error", target.name, snap);
-      logger.info("Saved key_error html snapshot", { target: target.name, path: savedPath });
+      const savedPath = await saveHtmlSnapshot("key_error", targetDisplayLabel(target), snap);
+      logger.info("Saved key_error html snapshot", { target: targetDisplayLabel(target), path: savedPath });
     }
   } catch (error) {
     const message = String(error);
-    logger.error("error_puppeteerDebug", { dateNow, target: target.name, error: message });
+    logger.error("error_puppeteerDebug", { dateNow, target: targetDisplayLabel(target), error: message });
     if (
       message.includes("ERR_NAME_NOT_RESOLVED") ||
       message.includes("ERR_CONNECTION") ||
@@ -514,10 +483,10 @@ async function puppeteerDebug(target: RuntimeTarget): Promise<void> {
       message.includes("Navigation timeout")
     ) {
       target.availabilityState = "down";
-      await sentUser(`Сайт _${target.name}_ недоступен (${message})`, 1, true, target);
+      await sentUser(`Сайт _${targetDisplayLabel(target)}_ недоступен (${message})`, 1, true, target, "unreachable");
     } else {
       target.availabilityState = "down";
-      await sentUser(`Сайт _${target.name}_ недоступен (${message})`, 1, true, target);
+      await sentUser(`Сайт _${targetDisplayLabel(target)}_ недоступен (${message})`, 1, true, target, "unreachable");
     }
   } finally {
     target.requested = false;
@@ -530,16 +499,16 @@ async function checkURL(target: RuntimeTarget): Promise<void> {
       if (target.theaterId === "GITIS" && browserClientRef) {
         const rebound = await browserClientRef.rebindGitisTargetPage(target);
         if (rebound) {
-          logger.info("GITIS page rebound by URL match", { target: target.name, url: target.url });
+          logger.info("GITIS page rebound by URL match", { target: targetDisplayLabel(target), url: target.url });
         }
       }
     }
     if (!target.page) {
-      logger.info("checkURL skipped: no bound page", { target: target.name, theaterId: target.theaterId });
+      logger.info("checkURL skipped: no bound page", { target: targetDisplayLabel(target), theaterId: target.theaterId });
       return;
     }
     if (target.requested) {
-      logger.info("checkURL skipped: request already in progress", { target: target.name, at: nowMoscowString() });
+      logger.info("checkURL skipped: request already in progress", { target: targetDisplayLabel(target), at: nowMoscowString() });
       return;
     }
     target.lastRequestedTimeBeforeUpdate = target.requestedTime;
@@ -555,8 +524,8 @@ async function checkURL(target: RuntimeTarget): Promise<void> {
 
     await puppeteerDebug(target);
   } catch (error) {
-    logger.error("error_checkURL", { dateNow, target: target.name, error: String(error) });
-    await sentUser(`error_checkURL : ${dateNow}`, 1, true, target);
+    logger.error("error_checkURL", { dateNow, target: targetDisplayLabel(target), error: String(error) });
+    await sentUser(`error_checkURL : ${dateNow}`, 1, true, target, "error");
   }
 }
 
@@ -565,7 +534,7 @@ async function checkSelect(target: RuntimeTarget): Promise<void> {
     return;
   }
   logger.info("RGSI selector check tick", {
-    target: target.name,
+    target: targetDisplayLabel(target),
     url: target.page.url()
   });
   await target.page.setViewport({ width: 1920, height: 1080 });
@@ -582,13 +551,13 @@ async function checkSelect(target: RuntimeTarget): Promise<void> {
       }))
     );
   } catch (error) {
-    logger.error("error_options", { target: target.name, error: String(error) });
+    logger.error("error_options", { target: targetDisplayLabel(target), error: String(error) });
   }
 
   if (options[0] && options[0].text === "В настоящий момент свободных дат для записи нет. Ждите.") {
-    await sentUser("нету дат", 0, false, target);
+    await sentUser("нету дат", 0, false, target, "key_ok");
   } else if (options[0]) {
-    await sentUser("проверь похоже есть дата", 0, false, target);
+    await sentUser("проверь похоже есть дата", 0, false, target, "key_false");
   }
 }
 
@@ -603,7 +572,7 @@ async function checkSite(targets: RuntimeTarget[]): Promise<void> {
   dateNow = nowMoscowString();
   try {
     const nextMs = nextCycleMs();
-    logger.info("Check cycle tick", { at: dateNow, nextCycleMs: nextMs });
+    // logger.info("Check cycle tick", { at: dateNow, nextCycleMs: nextMs });
 
     if (datePast) { // нужен как глобальная метка времени последнего “значимого” события, чтобы считать msgElapsedHours (сколько часов прошло) и не слать/не писать одинаковые не-критичные статусы слишком часто.
       msgElapsedHours = Math.round(
@@ -617,10 +586,10 @@ async function checkSite(targets: RuntimeTarget[]): Promise<void> {
         .milliseconds;
       if (targets[i].requested && elapsedMs >= effectiveStuckTimeoutMs) {
         if (!targets[i].waitForSelector && targets[i].availabilityState !== "down" && targets[i].stage !== 1) {
-          stuckText += `${targets[i].name} : true; `;
+          stuckText += `${targetDisplayLabel(targets[i])} : true; `;
         }
         logger.error("Request stuck timeout reached, forcing unlock", {
-          target: targets[i].name,
+          target: targetDisplayLabel(targets[i]),
           elapsedMs: Math.round(elapsedMs),
           timeoutMs: effectiveStuckTimeoutMs
         });
@@ -633,11 +602,11 @@ async function checkSite(targets: RuntimeTarget[]): Promise<void> {
     }
     await cleanupOldStatusLogs();
     if (stuckText !== "") {
-      await sentUser(`Страницы не обновляются ${stuckText}`, 1, true, targets[0]);
+      await sentUser(`Страницы не обновляются ${stuckText}`, 1, true, targets[0], "error");
     }
   } catch (error) {
     logger.error("error_checkSite", { dateNow, error: String(error) });
-    await sentUser(`error_checkSite : ${dateNow}`, 1, true, targets[0]);
+    await sentUser(`error_checkSite : ${dateNow}`, 1, true, targets[0], "error");
   } finally {
     const nextMs = nextCycleMs();
     setTimeout(() => void checkSite(targets), nextMs);
@@ -652,36 +621,48 @@ async function checkSiteRgsi(targets: RuntimeTarget[]): Promise<void> {
 }
 
 export async function runMonitor(targets: MonitorTarget[]): Promise<void> {
+  const urlToTargetId = new Map<string, number>();
+
+  for (const target of targets) {
+    const desiredCode = targetDisplayLabel(target);
+    const [row] = await ResourceTarget.findOrCreate({
+      where: { url: target.url },
+      defaults: {
+        code: desiredCode,
+        theater_id: target.theaterId,
+        url: target.url,
+        enabled: target.enabled
+      }
+    });
+    row.set({
+      code: desiredCode,
+      theater_id: target.theaterId,
+      url: target.url,
+      enabled: target.enabled
+    });
+    await row.save();
+    urlToTargetId.set(target.url, row.id);
+  }
+
   const runtimeTargets: RuntimeTarget[] = targets.filter((target) => target.enabled).map((target) => ({ ...target }));
   if (runtimeTargets.length === 0) {
     throw new Error("No enabled targets in config/targets.ts");
   }
   urlPast = new Array(runtimeTargets.length).fill(false);
 
+  targetIdMap.clear();
+  for (const target of runtimeTargets) {
+    const id = urlToTargetId.get(target.url);
+    if (id === undefined) {
+      throw new Error(`target id missing after sync: ${target.url}`);
+    }
+    targetIdMap.set(target.url, id);
+  }
+
   const browserClient = new BrowserClient();
   browserClientRef = browserClient;
   await browserClient.connect();
   await browserClient.bindPages(runtimeTargets);
-
-  for (const target of runtimeTargets) {
-    const [row] = await ResourceTarget.findOrCreate({
-      where: { url: target.url },
-      defaults: { code: target.name, theater_id: target.theaterId, url: target.url, enabled: target.enabled }
-    });
-    targetIdMap.set(target.url, row.id);
-    if (
-      row.code !== target.name ||
-      row.url !== target.url ||
-      row.enabled !== target.enabled ||
-      row.theater_id !== target.theaterId
-    ) {
-      row.code = target.name;
-      row.theater_id = target.theaterId;
-      row.url = target.url;
-      row.enabled = target.enabled;
-      await row.save();
-    }
-  }
 
   const mode = process.env.MONITOR_MODE ?? "general";
   if (mode === "rgsi") {

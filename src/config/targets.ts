@@ -1,5 +1,10 @@
 export type SearchMode = "contains" | "not_contains";
 
+/** Подпись в алертах и логах: `<theaterId>_<name>` (в конфиге `name` без префикса театра). */
+export function targetDisplayLabel(t: Pick<MonitorTarget, "theaterId" | "name">): string {
+  return `${t.theaterId}_${t.name}`;
+}
+
 export interface MonitorTarget {
   name: string;
   /** GITIS | VGIK | RGSI — связь с таблицей theater в БД */
@@ -18,9 +23,9 @@ export interface MonitorTarget {
 
 export const targets: MonitorTarget[] = [
   {
-    name: "GITIS_Меньшиков",
+    name: "Меньшиков",
     theaterId: "GITIS",
-    enabled: true,
+    enabled: false,
     url: "https://admission.gitis.net/242",
     searchText: "свободных дат пока нет",
     searchMode: "contains",
@@ -31,7 +36,7 @@ export const targets: MonitorTarget[] = [
     msgElapsedHours: 3
   },
   {
-    name: "GITIS_Блохин",
+    name: "Блохин",
     theaterId: "GITIS",
     enabled: false,
     url: "https://admission.gitis.net/243",
@@ -44,7 +49,7 @@ export const targets: MonitorTarget[] = [
     msgElapsedHours: 3
   },
   {
-    name: "GITIS_Кудряшов",
+    name: "Кудряшов",
     theaterId: "GITIS",
     enabled: true,
     url: "https://admission.gitis.net/244",
@@ -57,7 +62,7 @@ export const targets: MonitorTarget[] = [
     msgElapsedHours: 3
   },
   { // есть по опции 3 статуса: 1-поиск мая, 2-поиск ссылок более какой то цифры, задаётся по ссылке, найди max и укажи   3.пытается отправить POST
-    name: "VGIK_New",
+    name: "New",
     theaterId: "VGIK",
     enabled: true,
     url: "https://vgik.info/abiturient/higher/spetsialitet/aktyerskiy-fakultet/",
@@ -70,7 +75,7 @@ export const targets: MonitorTarget[] = [
     msgElapsedHours: 3
   },
   {
-    name: "VGIK_Мерзликин_13",
+    name: "Мерзликин_13",
     theaterId: "VGIK",
     enabled: true,
     url: "https://priemvgik.timepad.ru/event/3951178/",
@@ -83,7 +88,7 @@ export const targets: MonitorTarget[] = [
     msgElapsedHours: 3
   },
   {
-    name: "VGIK_Мерзликин_12",
+    name: "Мерзликин_12",
     theaterId: "VGIK",
     enabled: true,
     url: "https://priemvgik.timepad.ru/event/3951176/",
@@ -96,7 +101,7 @@ export const targets: MonitorTarget[] = [
     msgElapsedHours: 3
   },
   {
-    name: "VGIK_Мерзликин_15",
+    name: "Мерзликин_15",
     theaterId: "VGIK",
     enabled: true,
     url: "https://priemvgik.timepad.ru/event/3951179/",
@@ -109,7 +114,7 @@ export const targets: MonitorTarget[] = [
     msgElapsedHours: 3
   },
   {
-    name: "VGIK_Мерзликин_20",
+    name: "Мерзликин_20",
     theaterId: "VGIK",
     enabled: true,
     url: "https://priemvgik.timepad.ru/event/3951181/",
@@ -122,7 +127,7 @@ export const targets: MonitorTarget[] = [
     msgElapsedHours: 3
   },
   {
-    name: "VGIK_Федорова_7",
+    name: "Федоров_7",
     theaterId: "VGIK",
     enabled: true,
     url: "https://priemvgik.timepad.ru/event/3951188/",
@@ -135,36 +140,10 @@ export const targets: MonitorTarget[] = [
     msgElapsedHours: 3
   },
   {
-    name: "VGIK_Федорова_14",
+    name: "Федоров_14",
     theaterId: "VGIK",
     enabled: true,
     url: "https://priemvgik.timepad.ru/event/3951191/",
-    searchText: "регистрация на предварительное прослушивание закрыта, так как все места уже заняты!",
-    searchMode: "contains",
-    waitForSelector: true,
-    requested: false,
-    requestedTime: "2025-02-01 15:00:00",
-    stage: 0,
-    msgElapsedHours: 3
-  },
-  {
-    name: "VGIK_Вдовиченков_30",
-    theaterId: "VGIK",
-    enabled: false,
-    url: "https://priemvgik.timepad.ru/event/3349846/",
-    searchText: "регистрация на предварительное прослушивание закрыта, так как все места уже заняты!",
-    searchMode: "contains",
-    waitForSelector: true,
-    requested: false,
-    requestedTime: "2025-02-01 15:00:00",
-    stage: 0,
-    msgElapsedHours: 3
-  },
-  {
-    name: "VGIK_Вдовиченков_25",
-    theaterId: "VGIK",
-    enabled: false,
-    url: "https://priemvgik.timepad.ru/event/3320962/",
     searchText: "регистрация на предварительное прослушивание закрыта, так как все места уже заняты!",
     searchMode: "contains",
     waitForSelector: true,

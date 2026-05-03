@@ -26,9 +26,11 @@ function classifyGitisContentTail(contentLowercase: string): "registered_users_a
 
 /**
  * Разбор свободных дат из разметки модалки GITIS (радиокнопки с id dt_YYYY-MM-DD).
+ * Ячейка календаря: `<span class="available">` или `<span class="available short">`.
  */
 export function findGitisSlotDates(contentLowercase: string): string {
-  const regex = /<td><span class="available"><span><input type="radio" name="dt" id="dt_(\d{4}\-\d{2}\-\d{2})/g;
+  const regex =
+    /<td><span class="available(?: short)?"><span><input type="radio" name="dt" id="dt_(\d{4}\-\d{2}\-\d{2})/g;
   const dates: string[] = [];
   let match: RegExpExecArray | null;
   while ((match = regex.exec(contentLowercase)) !== null) {

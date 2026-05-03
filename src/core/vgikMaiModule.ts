@@ -133,23 +133,25 @@ async function buildCookieHeader(page: Page): Promise<string> {
   return cookies.map((c) => `${c.name}=${c.value}`).join("; ");
 }
 
-/** MODE=3: два POST каждые 20с, пока ответ не изменится; всё логируем в консоль. */
+/** MODE=3: два POST каждые 20с, пока ответ не изменится; всё логируем в консоль.
+ * `stateKey` — стабильный ключ состояния (URL таргета); `messageLabel` — текст в сообщениях. */
 export function runVgikMode3SubmitLoop(
-  targetName: string,
+  stateKey: string,
+  messageLabel: string,
   page: Page,
   onStepResult?: (message: string) => Promise<void>
 ): void {
-  const state = vgikMode3LoopState.get(targetName);
+  const state = vgikMode3LoopState.get(stateKey);
   if (state?.active) {
     return;
   }
-  vgikMode3LoopState.set(targetName, { lastCombinedResponse: null, active: true });
+  vgikMode3LoopState.set(stateKey, { lastCombinedResponse: null, active: true });
 
   const step1Url = process.env.VGIK_MODE3_STEP1_URL ?? "https://priemvgik.timepad.ru/event/widget_register/3951176";
   const step2Url = process.env.VGIK_MODE3_STEP2_URL ?? "https://priemvgik.timepad.ru/event/widget_register/3951179";
 
   const tick = async () => {
-    const current = vgikMode3LoopState.get(targetName);
+    const current = vgikMode3LoopState.get(stateKey);
     if (!current?.active) {
       return;
     }
@@ -179,26 +181,26 @@ export function runVgikMode3SubmitLoop(
       const body2 = typeof step2.data === "string" ? step2.data : JSON.stringify(step2.data);
       const combined = `${step1.status}|${body1.slice(0, 1500)}||${step2.status}|${body2.slice(0, 1500)}`;
 
-      console.log("[VGIK MODE3] step1", { target: targetName, url: step1Url, status: step1.status });
-      console.log("[VGIK MODE3] step2", { target: targetName, url: step2Url, status: step2.status });
+      console.log("[VGIK MODE3] step1", { target: messageLabel, url: step1Url, status: step1.status });
+      console.log("[VGIK MODE3] step2", { target: messageLabel, url: step2Url, status: step2.status });
       if (onStepResult) {
-        await onStepResult(`${targetName}: VGIK mode3 step1 status=${step1.status}`);
-        await onStepResult(`${targetName}: VGIK mode3 step2 status=${step2.status}`);
+        await onStepResult(`${messageLabel}: VGIK mode3 step1 status=${step1.status}`);
+        await onStepResult(`${messageLabel}: VGIK mode3 step2 status=${step2.status}`);
       }
 
       if (current.lastCombinedResponse !== null && current.lastCombinedResponse !== combined) {
-        console.log("[VGIK MODE3] response changed, stopping loop", { target: targetName });
+        console.log("[VGIK MODE3] response changed, stopping loop", { target: messageLabel });
         if (onStepResult) {
-          await onStepResult(`${targetName}: VGIK mode3 ответ изменился, цикл остановлен`);
+          await onStepResult(`${messageLabel}: VGIK mode3 ответ изменился, цикл остановлен`);
         }
-        vgikMode3LoopState.set(targetName, { lastCombinedResponse: combined, active: false });
+        vgikMode3LoopState.set(stateKey, { lastCombinedResponse: combined, active: false });
         return;
       }
-      vgikMode3LoopState.set(targetName, { lastCombinedResponse: combined, active: true });
+      vgikMode3LoopState.set(stateKey, { lastCombinedResponse: combined, active: true });
     } catch (error) {
-      console.log("[VGIK MODE3] submit loop error", { target: targetName, error: String(error) });
+      console.log("[VGIK MODE3] submit loop error", { target: messageLabel, error: String(error) });
     } finally {
-      if (vgikMode3LoopState.get(targetName)?.active) {
+      if (vgikMode3LoopState.get(stateKey)?.active) {
         setTimeout(() => void tick(), VGIK_MODE3_POLL_MS);
       }
     }

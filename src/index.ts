@@ -1,6 +1,7 @@
 import "dotenv/config";
 import { targets } from "./config/targets";
 import { runMonitor } from "./core/monitor";
+import { listenStatusSummaryServer } from "./http/statusSummaryServer";
 import { OutboundPostRequest } from "./infra/db/outboundPostRequest.model";
 import { ResourceStatusLog } from "./infra/db/resourceStatusLog.model";
 import { ResourceTarget } from "./infra/db/resourceTarget.model";
@@ -13,6 +14,10 @@ async function bootstrap(): Promise<void> {
   await ResourceStatusLog.sync();
   await OutboundPostRequest.sync();
   logger.info("Database initialized");
+
+  const port = Number(process.env.PORT ?? "1342");
+  listenStatusSummaryServer(port);
+
   await runMonitor(targets);
 }
 

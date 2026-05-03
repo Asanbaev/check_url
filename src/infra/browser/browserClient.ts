@@ -1,5 +1,6 @@
 import puppeteer, { Browser, Page } from "puppeteer";
-import { MonitorTarget } from "../../config/targets";
+import { MonitorTarget, targetDisplayLabel } from "../../config/targets";
+import { ResourceStatus } from "../db/resourceStatusLog.model";
 import { logger } from "../logging/logger";
 
 export interface RuntimeTarget extends MonitorTarget {
@@ -9,13 +10,10 @@ export interface RuntimeTarget extends MonitorTarget {
   lastStatusDbLoggedAt?: string;
   /** Простая state-machine доступности, чтобы не слать противоречивые алерты подряд */
   availabilityState?: "up" | "down";
-  /** Антидребезг пользовательских уведомлений */
-  lastAlertMessage?: string;
-  lastAlertStatus?: number;
+  /** Антидребезг: последний отправленный в Telegram доменный статус по таргету */
+  lastAlertResourceStatus?: ResourceStatus;
   /** Пер-таргет интервал отправки (чтобы один таргет не глушил другой) */
   lastUserNotifyAt?: string;
-  /** Подавление частых дублей одной и той же ошибки */
-  lastErrorSignature?: string;
   /** VGIK: страница на паузе из‑за Cloudflare / проверки человека — без reload до прохождения */
   vgikCfChallengePaused?: boolean;
   /** VGIK: одноразовое уведомление о паузе по Cloudflare на инцидент */
@@ -24,6 +22,39 @@ export interface RuntimeTarget extends MonitorTarget {
 
 export class BrowserClient {
   private browser?: Browser;
+  private browserConnectOptionsLogged = false;
+
+  private resolveBrowserConnectOptions(): { browserURL: string; protocolTimeout: number } {
+    const kindRaw = (process.env.BROWSER_KIND ?? "chrome").trim().toLowerCase();
+    const browserKind =
+      kindRaw === "firefox" || kindRaw === "chrome" || kindRaw === "opera" ? kindRaw : "chrome";
+
+    if (browserKind !== kindRaw) {
+      logger.info("Warning: unknown BROWSER_KIND value, fallback to chrome", { provided: kindRaw });
+    }
+
+    const fallbackUrl =
+      browserKind === "firefox"
+        ? "http://127.0.0.1:9223"
+        : browserKind === "opera"
+          ? "http://127.0.0.1:9224"
+          : "http://127.0.0.1:9222";
+    const connectOptions = {
+      browserURL: process.env.BROWSER_URL ?? fallbackUrl,
+      protocolTimeout: Number(process.env.BROWSER_PROTOCOL_TIMEOUT_MS ?? "180000")
+    };
+
+    if (!this.browserConnectOptionsLogged) {
+      this.browserConnectOptionsLogged = true;
+      logger.info("Browser connect options resolved", {
+        browserKind,
+        browserURL: connectOptions.browserURL,
+        protocolTimeout: connectOptions.protocolTimeout
+      });
+    }
+
+    return connectOptions;
+  }
 
   private normalizeMatchKey(url: string): string {
     try {
@@ -69,10 +100,7 @@ export class BrowserClient {
     } catch {
       // ignore reconnect cleanup errors
     }
-    this.browser = await puppeteer.connect({
-      browserURL: process.env.BROWSER_URL ?? "http://127.0.0.1:9222",
-      protocolTimeout: Number(process.env.BROWSER_PROTOCOL_TIMEOUT_MS ?? "180000")
-    });
+    this.browser = await puppeteer.connect(this.resolveBrowserConnectOptions());
   }
 
   async connect(): Promise<void> {
@@ -80,10 +108,7 @@ export class BrowserClient {
     let lastError: unknown;
     for (let i = 1; i <= attempts; i += 1) {
       try {
-        this.browser = await puppeteer.connect({
-          browserURL: process.env.BROWSER_URL ?? "http://127.0.0.1:9222",
-          protocolTimeout: Number(process.env.BROWSER_PROTOCOL_TIMEOUT_MS ?? "180000")
-        });
+        this.browser = await puppeteer.connect(this.resolveBrowserConnectOptions());
         return;
       } catch (error) {
         lastError = error;
@@ -138,7 +163,7 @@ export class BrowserClient {
             throw error;
           }
           logger.error("newPage failed with Network.enable timeout, reconnecting", {
-            target: target.name,
+            target: targetDisplayLabel(target),
             error: String(error)
           });
           await this.reconnect();
@@ -152,10 +177,10 @@ export class BrowserClient {
             waitUntil: "networkidle2",
             timeout: Number(process.env.BROWSER_PAGE_GOTO_TIMEOUT_MS ?? "20000")
           });
-          logger.info("Initial page navigated", { target: target.name, action: "goto", url: target.url });
+          logger.info("Initial page navigated", { target: targetDisplayLabel(target), action: "goto", url: target.url });
         } catch (error) {
           logger.error("Initial goto failed", {
-            target: target.name,
+            target: targetDisplayLabel(target),
             url: target.url,
             error: String(error)
           });
@@ -174,13 +199,13 @@ export class BrowserClient {
     } catch (error) {
       if (!this.isNetworkEnableTimeout(error)) {
         logger.error("rebindGitisTargetPage: browser.pages failed", {
-          target: target.name,
+          target: targetDisplayLabel(target),
           error: String(error)
         });
         return false;
       }
       logger.error("rebindGitisTargetPage: Network.enable timeout, reconnecting", {
-        target: target.name,
+        target: targetDisplayLabel(target),
         error: String(error)
       });
       await this.reconnect();
