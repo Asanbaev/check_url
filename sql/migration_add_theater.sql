@@ -12,7 +12,8 @@ CREATE TABLE IF NOT EXISTS `theater` (
 INSERT INTO `theater` (`id`, `name`) VALUES
   ('GITIS', 'ГИТИС'),
   ('VGIK', 'ВГИК'),
-  ('RGSI', 'РГИСИ')
+  ('RGSI', 'РГИСИ'),
+  ('SHEPKIN', 'ВТУ им. Щепкина')
 ON DUPLICATE KEY UPDATE `name` = VALUES(`name`);
 
 -- Если колонки ещё нет:

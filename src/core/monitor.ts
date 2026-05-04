@@ -455,10 +455,13 @@ async function puppeteerDebug(target: RuntimeTarget): Promise<void> {
           "key_false"
         );
       } else {
-        const msgNoFreeDates = `${targetDisplayLabel(target)}: Свободных дат пока нет`;
-        await writeStatusLogIfDue(target, "key_ok", msgNoFreeDates);
+        const msgOk =
+          target.theaterId === "GITIS"
+            ? `${targetDisplayLabel(target)}: Свободных дат пока нет`
+            : `${targetDisplayLabel(target)}: Анкеты не принимаются`;
+        await writeStatusLogIfDue(target, "key_ok", msgOk);
         if (msgElapsedHours >= msgMinValue || target.stage !== 0) {
-          await sentUser(msgNoFreeDates, 0, true, target, "key_ok");
+          await sentUser(msgOk, 0, true, target, "key_ok");
         }
       }
     } else if (target.searchMode === "not_contains") {
@@ -467,12 +470,16 @@ async function puppeteerDebug(target: RuntimeTarget): Promise<void> {
       if (msgElapsedHours >= msgMinValue || target.stage !== 0) {
         await sentUser(msgNotOpen, 0, true, target, "key_ok", "HTML");
       }
-    } else if (target.theaterId === "GITIS") {
-      await sentUser(`Дату не нашёл !! ${targetDisplayLabel(target)}`, 0, true, target, "key_error");
+    } else if (target.theaterId === "GITIS" || target.theaterId === "SHEPKIN") {
+      const msgOk2 =
+      target.theaterId === "GITIS"
+        ? `Дату не нашёл !! ${targetDisplayLabel(target)}`
+        : `Фразу, что сбор Анкет прекращён не нашёл, проверь !! ${targetDisplayLabel(target)}`;
+      await sentUser(msgOk2, 0, true, target, "key_error");
       const snap = await target.page.content();
       const savedPath = await saveHtmlSnapshot("key_error", targetDisplayLabel(target), snap);
       logger.info("Saved key_error html snapshot", { target: targetDisplayLabel(target), path: savedPath });
-    }
+    } 
   } catch (error) {
     const message = String(error);
     logger.error("error_puppeteerDebug", { dateNow, target: targetDisplayLabel(target), error: message });

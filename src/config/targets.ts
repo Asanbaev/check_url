@@ -7,7 +7,7 @@ export function targetDisplayLabel(t: Pick<MonitorTarget, "theaterId" | "name">)
 
 export interface MonitorTarget {
   name: string;
-  /** GITIS | VGIK | RGSI — связь с таблицей theater в БД */
+  /** GITIS | VGIK | RGSI | SHEPKIN — связь с таблицей theater в БД */
   theaterId: string;
   enabled: boolean;
   url: string;
@@ -58,6 +58,19 @@ export const targets: MonitorTarget[] = [
     waitForSelector: false,
     requested: false,
     requestedTime: "2025-02-01 15:00:00",
+    stage: 0,
+    msgElapsedHours: 3
+  },
+  {
+    name: "Форма",
+    theaterId: "SHEPKIN",
+    enabled: true,
+    url: "https://shepkinskoe.ru/forma/",
+    searchText: "временно заблокирована до окончания обработки",
+    searchMode: "contains",
+    waitForSelector: false,
+    requested: false,
+    requestedTime: "2026-02-01 15:00:00",
     stage: 0,
     msgElapsedHours: 3
   },
