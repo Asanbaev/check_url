@@ -11,7 +11,7 @@ export interface LatestTargetRow {
   url: string;
   status: ResourceStatus | null;
   details: string | null;
-  detected_at: Date | null;
+  detected_at: string | null;
 }
 
 const UFA_OFFSET_FROM_MOSCOW_HOURS = 2;
@@ -39,7 +39,8 @@ export async function queryLatestStatusPerTarget(): Promise<LatestTargetRow[]> {
     const rows = (await sequelize.query(
       `
       SELECT t.theater_id AS theater_id, t.code AS code, t.url AS url,
-             sl.status AS status, sl.details AS details, sl.detected_at AS detected_at
+             sl.status AS status, sl.details AS details,
+             DATE_FORMAT(sl.detected_at, '%Y-%m-%d %H:%i:%s') AS detected_at
       FROM \`target\` t
       LEFT JOIN (
         SELECT sl1.*
@@ -105,7 +106,7 @@ export function buildStatusSummaryHtml(rows: LatestTargetRow[]): string {
     .toFormat("dd.MM.yy HH:mm");
 
   if (rows.length === 0) {
-    return `<b>Сводка мониторинга</b>\n<i>Москва: ${escapeTelegramHtml(nowLine)}</i>\n\n<i>В базе нет включённых таргетов.</i>`;
+    return `<b>Сводка мониторинга</b>\n<i>Уфа: ${escapeTelegramHtml(nowLine)}</i>\n\n<i>В базе нет включённых таргетов.</i>`;
   }
 
   const byTheater = new Map<string, LatestTargetRow[]>();
@@ -131,8 +132,7 @@ export function buildStatusSummaryHtml(rows: LatestTargetRow[]): string {
     for (const r of group) {
       let datePart: string;
       if (r.detected_at) {
-        const dt = DateTime.fromJSDate(new Date(r.detected_at))
-          .setZone("Europe/Moscow")
+        const dt = DateTime.fromFormat(r.detected_at, "yyyy-LL-dd HH:mm:ss", { zone: "Europe/Moscow" })
           .plus({ hours: UFA_OFFSET_FROM_MOSCOW_HOURS });
         datePart = dt.isValid ? dt.toFormat("dd.MM.yy HH:mm") : "—";
       } else {
