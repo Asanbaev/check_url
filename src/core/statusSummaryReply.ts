@@ -14,6 +14,8 @@ export interface LatestTargetRow {
   detected_at: Date | null;
 }
 
+const UFA_OFFSET_FROM_MOSCOW_HOURS = 2;
+
 /** Экранирование для Telegram HTML (parse_mode HTML). */
 export function escapeTelegramHtml(s: string): string {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
@@ -33,24 +35,29 @@ export function masterLabelFromCode(theaterId: string, code: string): string {
 }
 
 export async function queryLatestStatusPerTarget(): Promise<LatestTargetRow[]> {
-  const rows = (await sequelize.query(
-    `
-    SELECT t.theater_id AS theater_id, t.code AS code, t.url AS url,
-           sl.status AS status, sl.details AS details, sl.detected_at AS detected_at
-    FROM \`target\` t
-    LEFT JOIN (
-      SELECT sl1.*
-      FROM status_log sl1
-      INNER JOIN (
-        SELECT target_id, MAX(id) AS max_id FROM status_log GROUP BY target_id
-      ) x ON sl1.target_id = x.target_id AND sl1.id = x.max_id
-    ) sl ON sl.target_id = t.id
-    WHERE t.enabled = 1
-    ORDER BY t.theater_id ASC, t.code ASC
-    `,
-    { type: QueryTypes.SELECT }
-  )) as LatestTargetRow[];
-  return rows;
+  try {
+    const rows = (await sequelize.query(
+      `
+      SELECT t.theater_id AS theater_id, t.code AS code, t.url AS url,
+             sl.status AS status, sl.details AS details, sl.detected_at AS detected_at
+      FROM \`target\` t
+      LEFT JOIN (
+        SELECT sl1.*
+        FROM status_log sl1
+        INNER JOIN (
+          SELECT target_id, MAX(id) AS max_id FROM status_log GROUP BY target_id
+        ) x ON sl1.target_id = x.target_id AND sl1.id = x.max_id
+      ) sl ON sl.target_id = t.id
+      WHERE t.enabled = 1
+      ORDER BY t.theater_id ASC, t.code ASC
+      `,
+      { type: QueryTypes.SELECT }
+    )) as LatestTargetRow[];
+    return rows;
+  } catch (error) {
+    logger.error("queryLatestStatusPerTarget: DB query failed", { error: String(error) });
+    return [];
+  }
 }
 
 function statusTextOnly(status: ResourceStatus | null): string {
@@ -92,7 +99,10 @@ function stripLeadingBeforeFirstUnderscore(text: string): string {
 
 /** Секции по театру: заголовок + строки «дата/время и текст из лога» (без `<pre>`-таблицы). */
 export function buildStatusSummaryHtml(rows: LatestTargetRow[]): string {
-  const nowLine = DateTime.now().setZone("Europe/Moscow").toFormat("dd.MM.yy HH:mm");
+  const nowLine = DateTime.now()
+    .setZone("Europe/Moscow")
+    .plus({ hours: UFA_OFFSET_FROM_MOSCOW_HOURS })
+    .toFormat("dd.MM.yy HH:mm");
 
   if (rows.length === 0) {
     return `<b>Сводка мониторинга</b>\n<i>Москва: ${escapeTelegramHtml(nowLine)}</i>\n\n<i>В базе нет включённых таргетов.</i>`;
@@ -121,7 +131,9 @@ export function buildStatusSummaryHtml(rows: LatestTargetRow[]): string {
     for (const r of group) {
       let datePart: string;
       if (r.detected_at) {
-        const dt = DateTime.fromJSDate(new Date(r.detected_at)).setZone("Europe/Moscow");
+        const dt = DateTime.fromJSDate(new Date(r.detected_at))
+          .setZone("Europe/Moscow")
+          .plus({ hours: UFA_OFFSET_FROM_MOSCOW_HOURS });
         datePart = dt.isValid ? dt.toFormat("dd.MM.yy HH:mm") : "—";
       } else {
         datePart = "—";

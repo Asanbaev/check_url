@@ -41,16 +41,24 @@ export async function publishAlert(input: PublishAlertInput): Promise<void> {
       target: input.targetName,
       status: input.status
     });
-    const moscowDt = moscowWallClockLiteralForDb();
-    const outbound = await OutboundPostRequest.create({
-      target_id: input.targetId,
-      req_body: { action: "resolve_recipients", result: "empty", status: input.status },
-      status: "failed",
-      created_at: moscowDt,
-      updated_at: moscowDt
-    });
-    outbound.error_text = "no_recipients_from_env";
-    await outbound.save();
+    try {
+      const moscowDt = moscowWallClockLiteralForDb();
+      const outbound = await OutboundPostRequest.create({
+        target_id: input.targetId,
+        req_body: { action: "resolve_recipients", result: "empty", status: input.status },
+        status: "failed",
+        created_at: moscowDt,
+        updated_at: moscowDt
+      });
+      outbound.error_text = "no_recipients_from_env";
+      await outbound.save();
+    } catch (error) {
+      logger.error("publishAlert: failed to persist no-recipient outbound row", {
+        target: input.targetName,
+        targetId: input.targetId,
+        error: String(error)
+      });
+    }
     return;
   }
 
@@ -69,14 +77,27 @@ export async function publishAlert(input: PublishAlertInput): Promise<void> {
     if (input.telegramParseMode === "HTML") {
       requestBody.parseMode = "html";
     }
-    const moscowDt = moscowWallClockLiteralForDb();
-    const outbound = await OutboundPostRequest.create({
-      target_id: input.targetId,
-      req_body: requestBody,
-      status: "pending",
-      created_at: moscowDt,
-      updated_at: moscowDt
-    });
+    let outbound: OutboundPostRequest | null = null;
+    try {
+      const moscowDt = moscowWallClockLiteralForDb();
+      outbound = await OutboundPostRequest.create({
+        target_id: input.targetId,
+        req_body: requestBody,
+        status: "pending",
+        created_at: moscowDt,
+        updated_at: moscowDt
+      });
+    } catch (error) {
+      logger.error("publishAlert: failed to create outbound row", {
+        target: input.targetName,
+        targetId: input.targetId,
+        tgChatId,
+        error: String(error)
+      });
+    }
+    if (!outbound) {
+      continue;
+    }
     try {
       const response = await axios.post(requestUrl, requestBody, {
         headers: {
@@ -93,6 +114,15 @@ export async function publishAlert(input: PublishAlertInput): Promise<void> {
       outbound.status = "failed";
       outbound.error_text = String(error);
     }
-    await outbound.save();
+    try {
+      await outbound.save();
+    } catch (error) {
+      logger.error("publishAlert: failed to save outbound row", {
+        target: input.targetName,
+        targetId: input.targetId,
+        tgChatId,
+        error: String(error)
+      });
+    }
   }
 }

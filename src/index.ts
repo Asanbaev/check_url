@@ -9,11 +9,15 @@ import { sequelize } from "./infra/db/sequelize";
 import { logger } from "./infra/logging/logger";
 
 async function bootstrap(): Promise<void> {
-  await sequelize.authenticate();
-  await ResourceTarget.sync();
-  await ResourceStatusLog.sync();
-  await OutboundPostRequest.sync();
-  logger.info("Database initialized");
+  try {
+    await sequelize.authenticate();
+    await ResourceTarget.sync();
+    await ResourceStatusLog.sync();
+    await OutboundPostRequest.sync();
+    logger.info("Database initialized");
+  } catch (error) {
+    logger.error("Database init failed, continue without guaranteed DB writes", { error: String(error) });
+  }
 
   const port = Number(process.env.PORT ?? "1342");
   listenStatusSummaryServer(port);

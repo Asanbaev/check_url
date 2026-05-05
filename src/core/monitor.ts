@@ -2,7 +2,12 @@ import { DateTime } from "luxon";
 import { Op, literal } from "sequelize";
 import { moscowWallClockLiteralForDb } from "../infra/time/moscowDb";
 import { MonitorTarget, targetDisplayLabel } from "../config/targets";
-import { clickFirstAvailableGitisDate, runGitisPipeline } from "./gitisModule";
+import {
+  clickFirstAvailableGitisDate,
+  clickFirstAvailableGitisTime,
+  clickGitisConfirmButton,
+  runGitisPipeline
+} from "./gitisModule";
 import {
   isVgikMaiFacultyPage,
   pageLooksLikeVgikCloudflareChallenge,
@@ -31,6 +36,8 @@ const keyFalseSaveFullPageHtml =
   process.env.SAVE_PAGE_HTML === "1" || process.env.SAVE_PAGE_HTML === "true";
 const requestStuckTimeoutMs = Number(process.env.REQUEST_STUCK_TIMEOUT_MS ?? "60000");
 const pageGotoTimeoutMs = Number(process.env.BROWSER_PAGE_GOTO_TIMEOUT_MS ?? "20000");
+const gitisSubmitEnabled =
+  (process.env.GITIS_SUBMIT_ENABLED ?? "false").trim().toLowerCase() === "true";
 const vgikMaiMode = Number(process.env.VGIK_MAI_MODE ?? "1");
 const quietHoursStart = Number(process.env.QUIET_HOURS_START ?? "22");
 const quietHoursEnd = Number(process.env.QUIET_HOURS_END ?? "7");
@@ -185,13 +192,41 @@ async function cleanupOldStatusLogs(): Promise<void> {
   lastCleanupMinute = minuteKey;
   const thresholdStr = DateTime.now().setZone("Europe/Moscow").minus({ days: 2 }).toFormat("yyyy-LL-dd HH:mm:ss");
   const esc = thresholdStr.replace(/'/g, "''");
-  await ResourceStatusLog.destroy({
-    where: {
-      created_at: {
-        [Op.lt]: literal(`'${esc}'`)
+  try {
+    await ResourceStatusLog.destroy({
+      where: {
+        created_at: {
+          [Op.lt]: literal(`'${esc}'`)
+        }
       }
-    }
-  });
+    });
+  } catch (error) {
+    logger.error("cleanupOldStatusLogs: delete failed", { error: String(error), thresholdStr });
+  }
+}
+
+async function disableTargetInDb(target: RuntimeTarget): Promise<void> {
+  const targetId = targetIdMap.get(target.url);
+  if (!targetId) {
+    logger.error("disableTargetInDb: target_id not found", {
+      target: targetDisplayLabel(target),
+      url: target.url
+    });
+    return;
+  }
+  try {
+    await ResourceTarget.update({ enabled: false }, { where: { id: targetId } });
+    logger.info("Target disabled in DB after GITIS submit", {
+      target: targetDisplayLabel(target),
+      targetId
+    });
+  } catch (error) {
+    logger.error("disableTargetInDb: update failed", {
+      target: targetDisplayLabel(target),
+      targetId,
+      error: String(error)
+    });
+  }
 }
 
 async function sentUser(
@@ -464,6 +499,47 @@ async function puppeteerDebug(target: RuntimeTarget): Promise<void> {
                 error: String(error)
               });
             }
+            if (gitisSubmitEnabled) {
+              const pickedTime = await clickFirstAvailableGitisTime(target.page);
+              if (!pickedTime) {
+                logger.error("GITIS submit flow: no available time slot found", {
+                  target: targetDisplayLabel(target)
+                });
+                return;
+              }
+              await new Promise((resolve) => setTimeout(resolve, 300));
+              const submitted = await clickGitisConfirmButton(target.page);
+              if (!submitted) {
+                logger.error("GITIS submit flow: confirm button not found/clicked", {
+                  target: targetDisplayLabel(target)
+                });
+                return;
+              }
+              await new Promise((resolve) => setTimeout(resolve, 400));
+              try {
+                const submitSnap = await target.page.content();
+                const submitPath = await saveHtmlSnapshot(
+                  "key_false_submit",
+                  targetDisplayLabel(target),
+                  submitSnap
+                );
+                logger.info("Saved key_false_submit html snapshot", {
+                  target: targetDisplayLabel(target),
+                  path: submitPath
+                });
+              } catch (error) {
+                logger.error("key_false_submit html snapshot failed", {
+                  target: targetDisplayLabel(target),
+                  error: String(error)
+                });
+              }
+              await disableTargetInDb(target);
+              target.enabled = false;
+              target.requested = false;
+              if (browserClientRef) {
+                await browserClientRef.closeTargetPage(target);
+              }
+            }
           }
         }
         return;
@@ -528,6 +604,9 @@ async function puppeteerDebug(target: RuntimeTarget): Promise<void> {
 
 async function checkURL(target: RuntimeTarget): Promise<void> {
   try {
+    if (!target.enabled) {
+      return;
+    }
     if (!target.page) {
       if (target.theaterId === "GITIS" && browserClientRef) {
         const rebound = await browserClientRef.rebindGitisTargetPage(target);
@@ -614,6 +693,9 @@ async function checkSite(targets: RuntimeTarget[]): Promise<void> {
     }
 
     for (let i = 0; i < targets.length; i += 1) {
+      if (!targets[i].enabled) {
+        continue;
+      }
       const elapsedMs = DateTime.fromISO(dateNow.replace(" ", "T"))
         .diff(DateTime.fromISO(targets[i].requestedTime.replace(" ", "T")), "milliseconds")
         .milliseconds;
@@ -658,23 +740,31 @@ export async function runMonitor(targets: MonitorTarget[]): Promise<void> {
 
   for (const target of targets) {
     const desiredCode = targetDisplayLabel(target);
-    const [row] = await ResourceTarget.findOrCreate({
-      where: { url: target.url },
-      defaults: {
+    try {
+      const [row] = await ResourceTarget.findOrCreate({
+        where: { url: target.url },
+        defaults: {
+          code: desiredCode,
+          theater_id: target.theaterId,
+          url: target.url,
+          enabled: target.enabled
+        }
+      });
+      row.set({
         code: desiredCode,
         theater_id: target.theaterId,
         url: target.url,
         enabled: target.enabled
-      }
-    });
-    row.set({
-      code: desiredCode,
-      theater_id: target.theaterId,
-      url: target.url,
-      enabled: target.enabled
-    });
-    await row.save();
-    urlToTargetId.set(target.url, row.id);
+      });
+      await row.save();
+      urlToTargetId.set(target.url, row.id);
+    } catch (error) {
+      logger.error("runMonitor: ResourceTarget sync failed", {
+        target: targetDisplayLabel(target),
+        url: target.url,
+        error: String(error)
+      });
+    }
   }
 
   const runtimeTargets: RuntimeTarget[] = targets.filter((target) => target.enabled).map((target) => ({ ...target }));
@@ -687,7 +777,12 @@ export async function runMonitor(targets: MonitorTarget[]): Promise<void> {
   for (const target of runtimeTargets) {
     const id = urlToTargetId.get(target.url);
     if (id === undefined) {
-      throw new Error(`target id missing after sync: ${target.url}`);
+      logger.error("runMonitor: target id missing after sync, disabling runtime target", {
+        target: targetDisplayLabel(target),
+        url: target.url
+      });
+      target.enabled = false;
+      continue;
     }
     targetIdMap.set(target.url, id);
   }

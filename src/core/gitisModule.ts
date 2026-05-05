@@ -112,3 +112,41 @@ export async function clickFirstAvailableGitisDate(page: Page): Promise<boolean>
     return false;
   }
 }
+
+/**
+ * Выбрать первый доступный слот времени после выбора даты (radio `name="time"`).
+ */
+export async function clickFirstAvailableGitisTime(page: Page): Promise<boolean> {
+  try {
+    return await page.evaluate(() => {
+      const input = document.querySelector<HTMLInputElement>('input[type="radio"][name="time"]');
+      if (!input) {
+        return false;
+      }
+      input.scrollIntoView({ block: "center", behavior: "instant" });
+      input.click();
+      return true;
+    });
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Нажать кнопку подтверждения записи в блоке `.confirm`.
+ */
+export async function clickGitisConfirmButton(page: Page): Promise<boolean> {
+  try {
+    return await page.evaluate(() => {
+      const button = document.querySelector<HTMLButtonElement>(".confirm button");
+      if (!button) {
+        return false;
+      }
+      button.scrollIntoView({ block: "center", behavior: "instant" });
+      button.click();
+      return true;
+    });
+  } catch {
+    return false;
+  }
+}

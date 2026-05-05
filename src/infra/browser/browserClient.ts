@@ -229,4 +229,23 @@ export class BrowserClient {
     }
     return false;
   }
+
+  async closeTargetPage(target: RuntimeTarget): Promise<boolean> {
+    const page = target.page;
+    if (!page) {
+      return false;
+    }
+    try {
+      await page.close({ runBeforeUnload: false });
+      target.page = undefined;
+      return true;
+    } catch (error) {
+      logger.error("closeTargetPage failed", {
+        target: targetDisplayLabel(target),
+        url: target.url,
+        error: String(error)
+      });
+      return false;
+    }
+  }
 }
