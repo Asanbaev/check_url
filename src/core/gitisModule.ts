@@ -90,3 +90,25 @@ export async function runGitisPipeline(page: Page, targetName: string): Promise<
 
   return { kind: "continue_search", contentLowercase: content };
 }
+
+/**
+ * После уведомления key_false: программно выбрать первую доступную дату (radio `name="dt"`).
+ * Нужно для отображения следующего шага записи в SPA без повторной загрузки страницы.
+ */
+export async function clickFirstAvailableGitisDate(page: Page): Promise<boolean> {
+  try {
+    return await page.evaluate(() => {
+      const input = document.querySelector<HTMLInputElement>(
+        'input[type="radio"][name="dt"][id^="dt_"]'
+      );
+      if (!input) {
+        return false;
+      }
+      input.scrollIntoView({ block: "center", behavior: "instant" });
+      input.click();
+      return true;
+    });
+  } catch {
+    return false;
+  }
+}

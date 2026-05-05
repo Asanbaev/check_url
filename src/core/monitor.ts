@@ -2,7 +2,7 @@ import { DateTime } from "luxon";
 import { Op, literal } from "sequelize";
 import { moscowWallClockLiteralForDb } from "../infra/time/moscowDb";
 import { MonitorTarget, targetDisplayLabel } from "../config/targets";
-import { runGitisPipeline } from "./gitisModule";
+import { clickFirstAvailableGitisDate, runGitisPipeline } from "./gitisModule";
 import {
   isVgikMaiFacultyPage,
   pageLooksLikeVgikCloudflareChallenge,
@@ -440,6 +440,32 @@ async function puppeteerDebug(target: RuntimeTarget): Promise<void> {
       }
       if (gitisResult.kind === "free_dates") {
         await sentUser(gitisResult.message, gitisResult.statusCode, true, target, "key_false");
+        if (target.page) {
+          const picked = await clickFirstAvailableGitisDate(target.page);
+          if (picked) {
+            logger.info(`GITIS key_false: выбрана первая доступная дата в календаре`, {
+              target: targetDisplayLabel(target)
+            });
+            await new Promise((resolve) => setTimeout(resolve, 400));
+            try {
+              const snapAfter = await target.page.content();
+              const pathAfter = await saveHtmlSnapshot(
+                "key_false_date_click",
+                targetDisplayLabel(target),
+                snapAfter
+              );
+              logger.info("Saved key_false_date_click html snapshot", {
+                target: targetDisplayLabel(target),
+                path: pathAfter
+              });
+            } catch (error) {
+              logger.error("key_false_date_click html snapshot failed", {
+                target: targetDisplayLabel(target),
+                error: String(error)
+              });
+            }
+          }
+        }
         return;
       }
       content = gitisResult.contentLowercase;
