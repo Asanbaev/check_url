@@ -126,6 +126,10 @@ function isBrowserErrorPage(content: string): boolean {
   );
 }
 
+function isChromeErrorUrl(url: string): boolean {
+  return url.startsWith("chrome-error://");
+}
+
 async function writeStatusLog(target: RuntimeTarget, status: ResourceStatus, details: string): Promise<boolean> {
   const targetId = targetIdMap.get(target.url);
   if (!targetId) {
@@ -333,15 +337,25 @@ async function puppeteerDebug(target: RuntimeTarget): Promise<void> {
     }
 
     if (!skipReload) {
-      const shouldNavigate = !target.page.url().includes(target.url);
+      const currentUrl = target.page.url();
+      const shouldNavigate = isChromeErrorUrl(currentUrl) || !currentUrl.includes(target.url);
       if (shouldNavigate) {
+        if (isChromeErrorUrl(currentUrl)) {
+          logger.error("Detected chrome-error page, forcing goto recovery", {
+            target: targetDisplayLabel(target),
+            currentUrl
+          });
+        }
         await target.page.goto(target.url, {
           waitUntil: "networkidle2",
           timeout: Number(process.env.BROWSER_PAGE_GOTO_TIMEOUT_MS ?? "20000")
         });
         logger.info(`Page navigated ${targetDisplayLabel(target)}`);
       } else {
-        await target.page.reload({ waitUntil: "networkidle2", timeout: 0 });
+        await target.page.reload({
+          waitUntil: "networkidle2",
+          timeout: Number(process.env.BROWSER_PAGE_GOTO_TIMEOUT_MS ?? "20000")
+        });
         logger.info(`Page navigated ${targetDisplayLabel(target)}`);
       }
     }
@@ -454,7 +468,30 @@ async function puppeteerDebug(target: RuntimeTarget): Promise<void> {
     }
 
     if (target.theaterId === "GITIS") {
-      const gitisResult = await runGitisPipeline(target.page, targetDisplayLabel(target));
+      const gitisResult = await runGitisPipeline(target.page, targetDisplayLabel(target), target.successText);
+      if (gitisResult.kind === "booking_success") {
+        await sentUser(gitisResult.message, 2, true, target, "key_false");
+        try {
+          const snap = await target.page.content();
+          const savedPath = await saveHtmlSnapshot("key_false_success", targetDisplayLabel(target), snap);
+          logger.info("Saved key_false_success html snapshot", {
+            target: targetDisplayLabel(target),
+            path: savedPath
+          });
+        } catch (error) {
+          logger.error("key_false_success html snapshot failed", {
+            target: targetDisplayLabel(target),
+            error: String(error)
+          });
+        }
+        await disableTargetInDb(target);
+        target.enabled = false;
+        target.requested = false;
+        if (browserClientRef) {
+          await browserClientRef.closeTargetPage(target);
+        }
+        return;
+      }
       if (gitisResult.kind === "modal_missing") {
         if (wasDownBeforeCheck) {
           await sentUser(`Сайт _${targetDisplayLabel(target)}_ недоступен (browser_error_page)`, 1, true, target, "unreachable");
@@ -499,45 +536,57 @@ async function puppeteerDebug(target: RuntimeTarget): Promise<void> {
                 error: String(error)
               });
             }
-            if (gitisSubmitEnabled) {
-              const pickedTime = await clickFirstAvailableGitisTime(target.page);
-              if (!pickedTime) {
-                logger.error("GITIS submit flow: no available time slot found", {
-                  target: targetDisplayLabel(target)
-                });
-                return;
-              }
-              await new Promise((resolve) => setTimeout(resolve, 300));
-              const submitted = await clickGitisConfirmButton(target.page);
-              if (!submitted) {
-                logger.error("GITIS submit flow: confirm button not found/clicked", {
-                  target: targetDisplayLabel(target)
-                });
-                return;
-              }
-              await new Promise((resolve) => setTimeout(resolve, 400));
-              try {
-                const submitSnap = await target.page.content();
-                const submitPath = await saveHtmlSnapshot(
-                  "key_false_submit",
-                  targetDisplayLabel(target),
-                  submitSnap
-                );
-                logger.info("Saved key_false_submit html snapshot", {
-                  target: targetDisplayLabel(target),
-                  path: submitPath
-                });
-              } catch (error) {
-                logger.error("key_false_submit html snapshot failed", {
-                  target: targetDisplayLabel(target),
-                  error: String(error)
-                });
-              }
-              await disableTargetInDb(target);
-              target.enabled = false;
-              target.requested = false;
-              if (browserClientRef) {
-                await browserClientRef.closeTargetPage(target);
+            if (gitisSubmitEnabled) { // блок если найдена дата, попытка сабмит
+              const htmlAfterDate = (await target.page.content()).toLowerCase();
+              const blockSubmitByMonth =
+                htmlAfterDate.includes("июнь") ||
+                htmlAfterDate.includes("июль") ||
+                htmlAfterDate.includes("август") ||
+                htmlAfterDate.includes("сентябрь");
+              if (blockSubmitByMonth) {
+                const skipMsg = "GITIS submit skipped: page contains июнь-сентябрь";
+                logger.info(skipMsg, { target: targetDisplayLabel(target) });
+                await sentUser(skipMsg, gitisResult.statusCode, true, target, "key_false");
+              } else {
+                const pickedTime = await clickFirstAvailableGitisTime(target.page);
+                if (!pickedTime) {
+                  logger.error("GITIS submit flow: no available time slot found", {
+                    target: targetDisplayLabel(target)
+                  });
+                  return;
+                }
+                await new Promise((resolve) => setTimeout(resolve, 300));
+                const submitted = await clickGitisConfirmButton(target.page);
+                if (!submitted) {
+                  logger.error("GITIS submit flow: confirm button not found/clicked", {
+                    target: targetDisplayLabel(target)
+                  });
+                  return;
+                }
+                await new Promise((resolve) => setTimeout(resolve, 400));
+                try {
+                  const submitSnap = await target.page.content();
+                  const submitPath = await saveHtmlSnapshot(
+                    "key_false_submit",
+                    targetDisplayLabel(target),
+                    submitSnap
+                  );
+                  logger.info("Saved key_false_submit html snapshot", {
+                    target: targetDisplayLabel(target),
+                    path: submitPath
+                  });
+                } catch (error) {
+                  logger.error("key_false_submit html snapshot failed", {
+                    target: targetDisplayLabel(target),
+                    error: String(error)
+                  });
+                }
+                await disableTargetInDb(target);
+                target.enabled = false;
+                target.requested = false;
+                if (browserClientRef) {
+                  await browserClientRef.closeTargetPage(target);
+                }
               }
             }
           }

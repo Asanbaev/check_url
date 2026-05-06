@@ -19,6 +19,7 @@ export interface MonitorTarget {
   stage: number;
   datePast?: string;
   msgElapsedHours: number;
+  successText?: string;
 }
 
 export const targets: MonitorTarget[] = [
@@ -33,7 +34,8 @@ export const targets: MonitorTarget[] = [
     requested: false,
     requestedTime: "2025-04-01 15:00:00",
     stage: 0,
-    msgElapsedHours: 3
+    msgElapsedHours: 3,
+    successText: "Вы уже записаны"
   },
   {
     name: "Блохин",
@@ -46,7 +48,8 @@ export const targets: MonitorTarget[] = [
     requested: false,
     requestedTime: "2025-04-01 15:00:00",
     stage: 0,
-    msgElapsedHours: 3
+    msgElapsedHours: 3,
+    successText: "Вы уже записаны"
   },
   {
     name: "Кудряшов",
@@ -59,7 +62,8 @@ export const targets: MonitorTarget[] = [
     requested: false,
     requestedTime: "2025-02-01 15:00:00",
     stage: 0,
-    msgElapsedHours: 3
+    msgElapsedHours: 3,
+    successText: "Вы уже записаны"
   },
   {
     name: "Форма",
@@ -72,12 +76,13 @@ export const targets: MonitorTarget[] = [
     requested: false,
     requestedTime: "2026-02-01 15:00:00",
     stage: 0,
-    msgElapsedHours: 3
+    msgElapsedHours: 3,
+    successText: "%%__NO_MATCH__QWERTY_ЪЫЬ_92731__%%"
   },
   { // есть по опции 3 статуса: 1-поиск мая, 2-поиск ссылок более какой то цифры, задаётся по ссылке, найди max и укажи   3.пытается отправить POST
     name: "New",
     theaterId: "VGIK",
-    enabled: true,
+    enabled: false,
     url: "https://vgik.info/abiturient/higher/spetsialitet/aktyerskiy-fakultet/",
     searchText: " мая ",
     searchMode: "not_contains",
@@ -85,12 +90,13 @@ export const targets: MonitorTarget[] = [
     requested: false,
     requestedTime: "2026-04-01 15:00:00",
     stage: 0,
-    msgElapsedHours: 3
+    msgElapsedHours: 3,
+    successText: "%%__NO_MATCH__QWERTY_ЪЫЬ_92731__%%"
   },
   {
     name: "Мерзликин_13",
     theaterId: "VGIK",
-    enabled: true,
+    enabled: false,
     url: "https://priemvgik.timepad.ru/event/3951178/",
     searchText: "регистрация на предварительное прослушивание закрыта, так как все места уже заняты!",
     searchMode: "contains",
@@ -98,12 +104,13 @@ export const targets: MonitorTarget[] = [
     requested: false,
     requestedTime: "2025-02-01 15:00:00",
     stage: 0,
-    msgElapsedHours: 3
+    msgElapsedHours: 3,
+    successText: "%%__NO_MATCH__QWERTY_ЪЫЬ_92731__%%"
   },
   {
     name: "Мерзликин_12",
     theaterId: "VGIK",
-    enabled: true,
+    enabled: false,
     url: "https://priemvgik.timepad.ru/event/3951176/",
     searchText: "регистрация на предварительное прослушивание закрыта, так как все места уже заняты!",
     searchMode: "contains",
@@ -111,12 +118,13 @@ export const targets: MonitorTarget[] = [
     requested: false,
     requestedTime: "2025-02-01 15:00:00",
     stage: 0,
-    msgElapsedHours: 3
+    msgElapsedHours: 3,
+    successText: "%%__NO_MATCH__QWERTY_ЪЫЬ_92731__%%"
   },
   {
     name: "Мерзликин_15",
     theaterId: "VGIK",
-    enabled: true,
+    enabled: false,
     url: "https://priemvgik.timepad.ru/event/3951179/",
     searchText: "регистрация на предварительное прослушивание закрыта, так как все места уже заняты!",
     searchMode: "contains",
@@ -124,12 +132,13 @@ export const targets: MonitorTarget[] = [
     requested: false,
     requestedTime: "2025-02-01 15:00:00",
     stage: 0,
-    msgElapsedHours: 3
+    msgElapsedHours: 3,
+    successText: "%%__NO_MATCH__QWERTY_ЪЫЬ_92731__%%"
   },
   {
     name: "Мерзликин_20",
     theaterId: "VGIK",
-    enabled: true,
+    enabled: false,
     url: "https://priemvgik.timepad.ru/event/3951181/",
     searchText: "регистрация на предварительное прослушивание закрыта, так как все места уже заняты!",
     searchMode: "contains",
@@ -137,12 +146,13 @@ export const targets: MonitorTarget[] = [
     requested: false,
     requestedTime: "2025-02-01 15:00:00",
     stage: 0,
-    msgElapsedHours: 3
+    msgElapsedHours: 3,
+    successText: "%%__NO_MATCH__QWERTY_ЪЫЬ_92731__%%"
   },
   {
     name: "Федоров_7",
     theaterId: "VGIK",
-    enabled: true,
+    enabled: false,
     url: "https://priemvgik.timepad.ru/event/3951188/",
     searchText: "регистрация на предварительное прослушивание закрыта, так как все места уже заняты!",
     searchMode: "contains",
@@ -150,12 +160,13 @@ export const targets: MonitorTarget[] = [
     requested: false,
     requestedTime: "2025-02-01 15:00:00",
     stage: 0,
-    msgElapsedHours: 3
+    msgElapsedHours: 3,
+    successText: "%%__NO_MATCH__QWERTY_ЪЫЬ_92731__%%"
   },
   {
     name: "Федоров_14",
     theaterId: "VGIK",
-    enabled: true,
+    enabled: false,
     url: "https://priemvgik.timepad.ru/event/3951191/",
     searchText: "регистрация на предварительное прослушивание закрыта, так как все места уже заняты!",
     searchMode: "contains",
@@ -163,9 +174,10 @@ export const targets: MonitorTarget[] = [
     requested: false,
     requestedTime: "2025-02-01 15:00:00",
     stage: 0,
-    msgElapsedHours: 3
+    msgElapsedHours: 3,
+    successText: "%%__NO_MATCH__QWERTY_ЪЫЬ_92731__%%"
   },
-  {
+  {//  tut stop
     name: "rgsi_Смирнов",
     theaterId: "RGSI",
     enabled: false,
@@ -176,7 +188,8 @@ export const targets: MonitorTarget[] = [
     requested: false,
     requestedTime: "2025-04-01 15:00:00",
     stage: 0,
-    msgElapsedHours: 3
+    msgElapsedHours: 3,
+    successText: "%%__NO_MATCH__QWERTY_ЪЫЬ_92731__%%"
   },
   {
     name: "rgsi_Стукалов",
@@ -189,6 +202,7 @@ export const targets: MonitorTarget[] = [
     requested: false,
     requestedTime: "2025-04-01 15:00:00",
     stage: 0,
-    msgElapsedHours: 3
+    msgElapsedHours: 3,
+    successText: "%%__NO_MATCH__QWERTY_ЪЫЬ_92731__%%"
   }
 ];

@@ -11,6 +11,7 @@ export interface GitisContentResult {
 
 /** Результат полного GITIS-пайплайна до общей проверки searchText (contains / not_contains). */
 export type RunGitisPipelineResult =
+  | { kind: "booking_success"; message: string }
   | { kind: "modal_missing"; message: string }
   | { kind: "registered_users_auth"; message: string }
   | { kind: "free_dates"; message: string; statusCode: number }
@@ -40,7 +41,7 @@ export function findGitisSlotDates(contentLowercase: string): string {
 }
 
 /**
- * GITIS подгружает модалку с задержкой: ждём и перечитываем HTML,
+ * GITIS подгружает модалку, если нет - потом с задержкой перечитываем HTML,
  * пока не появится `.one-course` или не истекут попытки.
  */
 export async function loadGitisContentWithDelay(page: Page): Promise<GitisContentResult> {
@@ -48,11 +49,13 @@ export async function loadGitisContentWithDelay(page: Page): Promise<GitisConten
   const maxAttempts = Number(process.env.GITIS_MODAL_RELOAD_ATTEMPTS ?? "2");
 
   let content = "";
-  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
-    await new Promise((resolve) => setTimeout(resolve, waitMs));
+  for (let i = 0; i < maxAttempts + 1; i += 1) {
     content = (await page.content()).toLowerCase();
     if (content.includes("one-course")) {
       return { content, hasOneCourse: true };
+    }
+    if (i < maxAttempts) {
+      await new Promise((resolve) => setTimeout(resolve, waitMs));
     }
   }
   return { content, hasOneCourse: false };
@@ -62,8 +65,22 @@ export async function loadGitisContentWithDelay(page: Page): Promise<GitisConten
  * Модалка → авторизация (только зарегистрированные) → слоты по разметке.
  * При отсутствии слотов в DOM возвращает `continue_search` для общего совпадения с `searchText` в мониторе.
  */
-export async function runGitisPipeline(page: Page, targetName: string): Promise<RunGitisPipelineResult> {
+export async function runGitisPipeline(
+  page: Page,
+  targetName: string,
+  successText?: string
+): Promise<RunGitisPipelineResult> {
   const gitis = await loadGitisContentWithDelay(page);
+  const content = gitis.content;
+
+  const successMarker = (successText ?? "").trim().toLowerCase();
+  if (successMarker && content.includes(successMarker)) {
+    return {
+      kind: "booking_success",
+      message: `${targetName}: подтверждена успешная запись (${successText})`
+    };
+  }
+
   if (!gitis.hasOneCourse) {
     return {
       kind: "modal_missing",
@@ -71,7 +88,6 @@ export async function runGitisPipeline(page: Page, targetName: string): Promise<
     };
   }
 
-  const content = gitis.content;
   if (classifyGitisContentTail(content) === "registered_users_auth") {
     return {
       kind: "registered_users_auth",
