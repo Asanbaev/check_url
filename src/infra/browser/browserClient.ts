@@ -8,6 +8,8 @@ export interface RuntimeTarget extends MonitorTarget {
   lastRequestedTimeBeforeUpdate?: string;
   /** Московское время последней строки ResourceStatusLog по этому таргету */
   lastStatusDbLoggedAt?: string;
+  /** Последний статус, который реально был записан в ResourceStatusLog */
+  lastStatusDbLoggedStatus?: ResourceStatus;
   /** Простая state-machine доступности, чтобы не слать противоречивые алерты подряд */
   availabilityState?: "up" | "down";
   /** Антидребезг: последний отправленный в Telegram доменный статус по таргету */

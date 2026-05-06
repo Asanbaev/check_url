@@ -168,7 +168,9 @@ async function writeStatusLogIfDue(
 ): Promise<boolean> {
   const nowIso = nowMoscowString();
   const last = target.lastStatusDbLoggedAt;
-  const bypassInterval = status === "key_false";
+  const statusChangedSinceLastDbWrite = target.lastStatusDbLoggedStatus !== undefined
+    && target.lastStatusDbLoggedStatus !== status;
+  const bypassInterval = status === "key_false" || statusChangedSinceLastDbWrite;
   if (last && !bypassInterval) {
     const tNow = parseMoscowTimestamp(nowIso);
     const tLast = parseMoscowTimestamp(last);
@@ -184,6 +186,7 @@ async function writeStatusLogIfDue(
   const inserted = await writeStatusLog(target, status, details);
   if (inserted) {
     target.lastStatusDbLoggedAt = nowIso;
+    target.lastStatusDbLoggedStatus = status;
   }
   return inserted;
 }

@@ -71,20 +71,24 @@ export async function runGitisPipeline(
   successText?: string
 ): Promise<RunGitisPipelineResult> {
   const gitis = await loadGitisContentWithDelay(page);
-  const content = gitis.content;
+  if (!gitis.hasOneCourse) {
+    return {
+      kind: "modal_missing",
+      message: `Дату не нашёл !! ${targetName} (модалка не открыта, .one-course не найден)`
+    };
+  }
+
+  const stabilizeMs = Number(process.env.GITIS_MODAL_STABILIZE_MS ?? "500");
+  if (stabilizeMs > 0) {
+    await new Promise((resolve) => setTimeout(resolve, stabilizeMs));
+  }
+  const content = (await page.content()).toLowerCase();
 
   const successMarker = (successText ?? "").trim().toLowerCase();
   if (successMarker && content.includes(successMarker)) {
     return {
       kind: "booking_success",
       message: `${targetName}: подтверждена успешная запись (${successText})`
-    };
-  }
-
-  if (!gitis.hasOneCourse) {
-    return {
-      kind: "modal_missing",
-      message: `Дату не нашёл !! ${targetName} (модалка не открыта, .one-course не найден)`
     };
   }
 

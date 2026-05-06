@@ -34,7 +34,7 @@ export function createStatusSummaryApp(): express.Express {
       const html = buildStatusSummaryHtml(rows);
       logger.info(`Сводка: собрано таргетов ${rows.length}, длина HTML ${html.length}`);
       // ВРЕМЕННО: полный текст сводки (убрать после отладки)
-      logger.info(`Сводка HTML (временно, полный текст, len=${html.length}):\n${html}`);
+      logger.info(`Сводка HTML..`);
       await enqueueTelegramHtmlReply(tgChatId, html);
 
       return res.json({ ok: true, data: { targets: rows.length } });
