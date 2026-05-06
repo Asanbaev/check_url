@@ -54,7 +54,7 @@ export const targets: MonitorTarget[] = [
   {
     name: "Кудряшов",
     theaterId: "GITIS",
-    enabled: true,
+    enabled: false,
     url: "https://admission.gitis.net/244",
     searchText: "Свободных дат пока нет",
     searchMode: "contains",
@@ -82,7 +82,7 @@ export const targets: MonitorTarget[] = [
   { // есть по опции 3 статуса: 1-поиск мая, 2-поиск ссылок более какой то цифры, задаётся по ссылке, найди max и укажи   3.пытается отправить POST
     name: "New",
     theaterId: "VGIK",
-    enabled: false,
+    enabled: true,
     url: "https://vgik.info/abiturient/higher/spetsialitet/aktyerskiy-fakultet/",
     searchText: " мая ",
     searchMode: "not_contains",
@@ -96,7 +96,7 @@ export const targets: MonitorTarget[] = [
   {
     name: "Мерзликин_13",
     theaterId: "VGIK",
-    enabled: false,
+    enabled: true,
     url: "https://priemvgik.timepad.ru/event/3951178/",
     searchText: "регистрация на предварительное прослушивание закрыта, так как все места уже заняты!",
     searchMode: "contains",
@@ -110,7 +110,7 @@ export const targets: MonitorTarget[] = [
   {
     name: "Мерзликин_12",
     theaterId: "VGIK",
-    enabled: false,
+    enabled: true,
     url: "https://priemvgik.timepad.ru/event/3951176/",
     searchText: "регистрация на предварительное прослушивание закрыта, так как все места уже заняты!",
     searchMode: "contains",
@@ -124,7 +124,7 @@ export const targets: MonitorTarget[] = [
   {
     name: "Мерзликин_15",
     theaterId: "VGIK",
-    enabled: false,
+    enabled: true,
     url: "https://priemvgik.timepad.ru/event/3951179/",
     searchText: "регистрация на предварительное прослушивание закрыта, так как все места уже заняты!",
     searchMode: "contains",
@@ -138,7 +138,7 @@ export const targets: MonitorTarget[] = [
   {
     name: "Мерзликин_20",
     theaterId: "VGIK",
-    enabled: false,
+    enabled: true,
     url: "https://priemvgik.timepad.ru/event/3951181/",
     searchText: "регистрация на предварительное прослушивание закрыта, так как все места уже заняты!",
     searchMode: "contains",
@@ -152,7 +152,7 @@ export const targets: MonitorTarget[] = [
   {
     name: "Федоров_7",
     theaterId: "VGIK",
-    enabled: false,
+    enabled: true,
     url: "https://priemvgik.timepad.ru/event/3951188/",
     searchText: "регистрация на предварительное прослушивание закрыта, так как все места уже заняты!",
     searchMode: "contains",
@@ -166,7 +166,7 @@ export const targets: MonitorTarget[] = [
   {
     name: "Федоров_14",
     theaterId: "VGIK",
-    enabled: false,
+    enabled: true,
     url: "https://priemvgik.timepad.ru/event/3951191/",
     searchText: "регистрация на предварительное прослушивание закрыта, так как все места уже заняты!",
     searchMode: "contains",

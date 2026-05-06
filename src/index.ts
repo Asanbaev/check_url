@@ -1,11 +1,14 @@
 import "dotenv/config";
 import { targets } from "./config/targets";
 import { runMonitor } from "./core/monitor";
+import { runStatusSummaryDbPoller } from "./core/statusSummaryDbPoller";
 import { listenStatusSummaryServer } from "./http/statusSummaryServer";
+import { InboundTransportRequest } from "./infra/db/inboundTransportRequest.model";
 import { OutboundPostRequest } from "./infra/db/outboundPostRequest.model";
 import { ResourceStatusLog } from "./infra/db/resourceStatusLog.model";
 import { ResourceTarget } from "./infra/db/resourceTarget.model";
 import { sequelize } from "./infra/db/sequelize";
+import { transportSequelize } from "./infra/db/transportSequelize";
 import { logger } from "./infra/logging/logger";
 
 async function bootstrap(): Promise<void> {
@@ -19,8 +22,22 @@ async function bootstrap(): Promise<void> {
     logger.error("Database init failed, continue without guaranteed DB writes", { error: String(error) });
   }
 
-  const port = Number(process.env.PORT ?? "1342");
-  listenStatusSummaryServer(port);
+  const ingressMode = (process.env.STATUS_SUMMARY_INGRESS_MODE ?? "http").trim().toLowerCase();
+  if (ingressMode === "db") {
+    try {
+      await transportSequelize.authenticate();
+      await InboundTransportRequest.sync();
+      logger.info("Transport DB initialized");
+      await runStatusSummaryDbPoller();
+    } catch (error) {
+      logger.error("Transport DB init failed, fallback to HTTP ingress", { error: String(error) });
+      const port = Number(process.env.PORT ?? "1342");
+      listenStatusSummaryServer(port);
+    }
+  } else {
+    const port = Number(process.env.PORT ?? "1342");
+    listenStatusSummaryServer(port);
+  }
 
   await runMonitor(targets);
 }
