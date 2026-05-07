@@ -2,6 +2,7 @@ import axios from "axios";
 import { DateTime } from "luxon";
 import { QueryTypes } from "sequelize";
 import { ResourceStatus } from "../infra/db/resourceStatusLog.model";
+import { withDbRetry } from "../infra/db/retryDb";
 import { sequelize } from "../infra/db/sequelize";
 import { logger } from "../infra/logging/logger";
 
@@ -36,8 +37,9 @@ export function masterLabelFromCode(theaterId: string, code: string): string {
 
 export async function queryLatestStatusPerTarget(): Promise<LatestTargetRow[]> {
   try {
-    const rows = (await sequelize.query(
-      `
+    const rows = (await withDbRetry("queryLatestStatusPerTarget.query", async () =>
+      sequelize.query(
+        `
       SELECT t.theater_id AS theater_id, t.code AS code, t.url AS url,
              sl.status AS status, sl.details AS details,
              DATE_FORMAT(sl.detected_at, '%Y-%m-%d %H:%i:%s') AS detected_at
@@ -52,7 +54,8 @@ export async function queryLatestStatusPerTarget(): Promise<LatestTargetRow[]> {
       WHERE t.enabled = 1
       ORDER BY t.theater_id ASC, t.code ASC
       `,
-      { type: QueryTypes.SELECT }
+        { type: QueryTypes.SELECT }
+      )
     )) as LatestTargetRow[];
     return rows;
   } catch (error) {

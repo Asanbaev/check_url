@@ -19,6 +19,7 @@ import { publishAlert } from "../infra/publisher/alertPublisher";
 import { logger } from "../infra/logging/logger";
 import { saveHtmlSnapshot } from "../infra/logging/outputHtmlLogger";
 import { BrowserClient, RuntimeTarget } from "../infra/browser/browserClient";
+import { withDbRetry } from "../infra/db/retryDb";
 import { ResourceStatus, ResourceStatusLog } from "../infra/db/resourceStatusLog.model";
 import { ResourceTarget } from "../infra/db/resourceTarget.model";
 
@@ -141,14 +142,16 @@ async function writeStatusLog(target: RuntimeTarget, status: ResourceStatus, det
   }
   try {
     const moscowDt = moscowWallClockLiteralForDb();
-    await ResourceStatusLog.create({
-      target_id: targetId,
-      status,
-      details,
-      /** SQL-литерал Europe/Moscow: драйвер не должен пересобирать instant в TZ процесса */
-      detected_at: moscowDt,
-      created_at: moscowDt
-    });
+    await withDbRetry(`writeStatusLog.create target=${targetDisplayLabel(target)}`, async () =>
+      ResourceStatusLog.create({
+        target_id: targetId,
+        status,
+        details,
+        /** SQL-литерал Europe/Moscow: драйвер не должен пересобирать instant в TZ процесса */
+        detected_at: moscowDt,
+        created_at: moscowDt
+      })
+    );
     return true;
   } catch (error) {
     logger.error("writeStatusLog: insert failed", {
@@ -196,17 +199,19 @@ async function cleanupOldStatusLogs(): Promise<void> {
   if (lastCleanupMinute === minuteKey) {
     return;
   }
-  lastCleanupMinute = minuteKey;
   const thresholdStr = DateTime.now().setZone("Europe/Moscow").minus({ days: 2 }).toFormat("yyyy-LL-dd HH:mm:ss");
   const esc = thresholdStr.replace(/'/g, "''");
   try {
-    await ResourceStatusLog.destroy({
-      where: {
-        created_at: {
-          [Op.lt]: literal(`'${esc}'`)
+    await withDbRetry(`cleanupOldStatusLogs.destroy threshold=${thresholdStr}`, async () =>
+      ResourceStatusLog.destroy({
+        where: {
+          created_at: {
+            [Op.lt]: literal(`'${esc}'`)
+          }
         }
-      }
-    });
+      })
+    );
+    lastCleanupMinute = minuteKey;
   } catch (error) {
     logger.error("cleanupOldStatusLogs: delete failed", { error: String(error), thresholdStr });
   }
@@ -222,7 +227,9 @@ async function disableTargetInDb(target: RuntimeTarget): Promise<void> {
     return;
   }
   try {
-    await ResourceTarget.update({ enabled: false }, { where: { id: targetId } });
+    await withDbRetry(`disableTargetInDb.update target=${targetDisplayLabel(target)} id=${targetId}`, async () =>
+      ResourceTarget.update({ enabled: false }, { where: { id: targetId } })
+    );
     logger.info("Target disabled in DB after GITIS submit", {
       target: targetDisplayLabel(target),
       targetId
@@ -793,22 +800,24 @@ export async function runMonitor(targets: MonitorTarget[]): Promise<void> {
   for (const target of targets) {
     const desiredCode = targetDisplayLabel(target);
     try {
-      const [row] = await ResourceTarget.findOrCreate({
-        where: { url: target.url },
-        defaults: {
-          code: desiredCode,
-          theater_id: target.theaterId,
-          url: target.url,
-          enabled: target.enabled
-        }
-      });
+      const [row] = await withDbRetry(`runMonitor.findOrCreate target=${desiredCode}`, async () =>
+        ResourceTarget.findOrCreate({
+          where: { url: target.url },
+          defaults: {
+            code: desiredCode,
+            theater_id: target.theaterId,
+            url: target.url,
+            enabled: target.enabled
+          }
+        })
+      );
       row.set({
         code: desiredCode,
         theater_id: target.theaterId,
         url: target.url,
         enabled: target.enabled
       });
-      await row.save();
+      await withDbRetry(`runMonitor.save target=${desiredCode} id=${row.id}`, async () => row.save());
       urlToTargetId.set(target.url, row.id);
     } catch (error) {
       logger.error("runMonitor: ResourceTarget sync failed", {

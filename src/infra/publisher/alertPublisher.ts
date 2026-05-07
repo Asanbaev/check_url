@@ -1,5 +1,6 @@
 import axios from "axios";
 import { OutboundPostRequest } from "../db/outboundPostRequest.model";
+import { withDbRetry } from "../db/retryDb";
 import { ResourceStatus } from "../db/resourceStatusLog.model";
 import { logger } from "../logging/logger";
 import { moscowWallClockLiteralForDb } from "../time/moscowDb";
@@ -43,15 +44,17 @@ export async function publishAlert(input: PublishAlertInput): Promise<void> {
     });
     try {
       const moscowDt = moscowWallClockLiteralForDb();
-      const outbound = await OutboundPostRequest.create({
-        target_id: input.targetId,
-        req_body: { action: "resolve_recipients", result: "empty", status: input.status },
-        status: "failed",
-        created_at: moscowDt,
-        updated_at: moscowDt
-      });
+      const outbound = await withDbRetry(`publishAlert.createNoRecipient targetId=${input.targetId}`, async () =>
+        OutboundPostRequest.create({
+          target_id: input.targetId,
+          req_body: { action: "resolve_recipients", result: "empty", status: input.status },
+          status: "failed",
+          created_at: moscowDt,
+          updated_at: moscowDt
+        })
+      );
       outbound.error_text = "no_recipients_from_env";
-      await outbound.save();
+      await withDbRetry(`publishAlert.saveNoRecipient targetId=${input.targetId}`, async () => outbound.save());
     } catch (error) {
       logger.error("publishAlert: failed to persist no-recipient outbound row", {
         target: input.targetName,
@@ -80,13 +83,15 @@ export async function publishAlert(input: PublishAlertInput): Promise<void> {
     let outbound: OutboundPostRequest | null = null;
     try {
       const moscowDt = moscowWallClockLiteralForDb();
-      outbound = await OutboundPostRequest.create({
-        target_id: input.targetId,
-        req_body: requestBody,
-        status: "pending",
-        created_at: moscowDt,
-        updated_at: moscowDt
-      });
+      outbound = await withDbRetry(`publishAlert.create targetId=${input.targetId} tgChatId=${tgChatId}`, async () =>
+        OutboundPostRequest.create({
+          target_id: input.targetId,
+          req_body: requestBody,
+          status: "pending",
+          created_at: moscowDt,
+          updated_at: moscowDt
+        })
+      );
     } catch (error) {
       logger.error("publishAlert: failed to create outbound row", {
         target: input.targetName,
@@ -115,7 +120,7 @@ export async function publishAlert(input: PublishAlertInput): Promise<void> {
       outbound.error_text = String(error);
     }
     try {
-      await outbound.save();
+      await withDbRetry(`publishAlert.save targetId=${input.targetId} tgChatId=${tgChatId}`, async () => outbound.save());
     } catch (error) {
       logger.error("publishAlert: failed to save outbound row", {
         target: input.targetName,

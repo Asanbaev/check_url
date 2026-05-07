@@ -1,6 +1,7 @@
 import { Op } from "sequelize";
 import { buildStatusSummaryHtml, enqueueTelegramHtmlReply, queryLatestStatusPerTarget } from "./statusSummaryReply";
 import { InboundTransportRequest } from "../infra/db/inboundTransportRequest.model";
+import { withDbRetry } from "../infra/db/retryDb";
 import { logger } from "../infra/logging/logger";
 
 const TRANSPORT_CODE = "status_summary";
@@ -13,21 +14,25 @@ export async function runStatusSummaryDbPoller(): Promise<void> {
 
   async function tick(): Promise<void> {
     try {
-      const rows = await InboundTransportRequest.findAll({
-        where: {
-          transport_code: TRANSPORT_CODE,
-          app_code: appCode,
-          status: { [Op.in]: ["pending", "failed"] },
-          attempts: { [Op.lt]: maxAttempts }
-        },
-        order: [["id", "ASC"]],
-        limit: batchSize
-      });
+      const rows = await withDbRetry(`statusSummaryDbPoller.findAll app=${appCode}`, async () =>
+        InboundTransportRequest.findAll({
+          where: {
+            transport_code: TRANSPORT_CODE,
+            app_code: appCode,
+            status: { [Op.in]: ["pending", "failed"] },
+            attempts: { [Op.lt]: maxAttempts }
+          },
+          order: [["id", "ASC"]],
+          limit: batchSize
+        })
+      );
 
       for (const row of rows) {
-        const [lockedCount] = await InboundTransportRequest.update(
-          { status: "processing", error_text: null },
-          { where: { id: row.id, status: row.status } }
+        const [lockedCount] = await withDbRetry(`statusSummaryDbPoller.lock id=${row.id}`, async () =>
+          InboundTransportRequest.update(
+            { status: "processing", error_text: null },
+            { where: { id: row.id, status: row.status } }
+          )
         );
         if (lockedCount === 0) {
           continue;
@@ -56,7 +61,7 @@ export async function runStatusSummaryDbPoller(): Promise<void> {
           });
         } finally {
           row.attempts += 1;
-          await row.save();
+          await withDbRetry(`statusSummaryDbPoller.save id=${row.id}`, async () => row.save());
         }
       }
     } catch (error) {
