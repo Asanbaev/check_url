@@ -114,22 +114,27 @@ export async function runGitisPipeline(
 /**
  * После уведомления key_false: программно выбрать первую доступную дату (radio `name="dt"`).
  * Нужно для отображения следующего шага записи в SPA без повторной загрузки страницы.
+ * Возвращает выбранную дату в формате YYYY-MM-DD либо null, если дата не выбрана.
  */
-export async function clickFirstAvailableGitisDate(page: Page): Promise<boolean> {
+export async function clickFirstAvailableGitisDate(page: Page): Promise<string | null> {
   try {
     return await page.evaluate(() => {
       const input = document.querySelector<HTMLInputElement>(
         'input[type="radio"][name="dt"][id^="dt_"]'
       );
       if (!input) {
-        return false;
+        return null;
+      }
+      const dateIso = input.id.startsWith("dt_") ? input.id.slice(3) : "";
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(dateIso)) {
+        return null;
       }
       input.scrollIntoView({ block: "center", behavior: "instant" });
       input.click();
-      return true;
+      return dateIso;
     });
   } catch {
-    return false;
+    return null;
   }
 }
 

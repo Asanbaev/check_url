@@ -39,6 +39,7 @@ const requestStuckTimeoutMs = Number(process.env.REQUEST_STUCK_TIMEOUT_MS ?? "60
 const pageGotoTimeoutMs = Number(process.env.BROWSER_PAGE_GOTO_TIMEOUT_MS ?? "20000");
 const gitisSubmitEnabled =
   (process.env.GITIS_SUBMIT_ENABLED ?? "false").trim().toLowerCase() === "true";
+const gitisSubmitBeforeDate = (process.env.GITIS_SUBMIT_BEFORE_DATE ?? "2026-06-01").trim();
 const vgikMaiMode = Number(process.env.VGIK_MAI_MODE ?? "1");
 const quietHoursStart = Number(process.env.QUIET_HOURS_START ?? "22");
 const quietHoursEnd = Number(process.env.QUIET_HOURS_END ?? "7");
@@ -48,6 +49,10 @@ let urlPast: boolean[] = [];
 let targetIdMap = new Map<string, number>();
 let lastCleanupMinute: string | null = null;
 let browserClientRef: BrowserClient | null = null;
+
+function isIsoDate(s: string): boolean {
+  return /^\d{4}-\d{2}-\d{2}$/.test(s);
+}
 
 function nowMoscowString(): string {
   return DateTime.local().setZone("Europe/Moscow").toFormat("yyyy-LL-dd HH:mm:ss");
@@ -523,11 +528,19 @@ async function puppeteerDebug(target: RuntimeTarget): Promise<void> {
       if (gitisResult.kind === "free_dates") {
         await sentUser(gitisResult.message, gitisResult.statusCode, true, target, "key_false");
         if (target.page) {
-          const picked = await clickFirstAvailableGitisDate(target.page);
-          if (picked) {
-            logger.info(`GITIS key_false: выбрана первая доступная дата в календаре`, {
-              target: targetDisplayLabel(target)
+          const pickedDate = await clickFirstAvailableGitisDate(target.page);
+          if (pickedDate) {
+            logger.info("GITIS key_false: выбрана первая доступная дата в календаре", {
+              target: targetDisplayLabel(target),
+              pickedDate
             });
+            const canSubmitByDate = isIsoDate(gitisSubmitBeforeDate) && pickedDate < gitisSubmitBeforeDate;
+            if (!isIsoDate(gitisSubmitBeforeDate)) {
+              logger.error("GITIS submit date threshold is invalid, submit disabled by date", {
+                target: targetDisplayLabel(target),
+                gitisSubmitBeforeDate
+              });
+            }
             await new Promise((resolve) => setTimeout(resolve, 400));
             try {
               const snapAfter = await target.page.content();
@@ -538,6 +551,9 @@ async function puppeteerDebug(target: RuntimeTarget): Promise<void> {
               );
               logger.info("Saved key_false_date_click html snapshot", {
                 target: targetDisplayLabel(target),
+                pickedDate,
+                gitisSubmitBeforeDate,
+                submitAllowed: canSubmitByDate,
                 path: pathAfter
               });
             } catch (error) {
@@ -546,58 +562,63 @@ async function puppeteerDebug(target: RuntimeTarget): Promise<void> {
                 error: String(error)
               });
             }
-            if (gitisSubmitEnabled) { // блок если найдена дата, попытка сабмит
-              const htmlAfterDate = (await target.page.content()).toLowerCase();
-              const blockSubmitByMonth =
-                htmlAfterDate.includes("июнь") ||
-                htmlAfterDate.includes("июль") ||
-                htmlAfterDate.includes("август") ||
-                htmlAfterDate.includes("сентябрь");
-              if (blockSubmitByMonth) {
-                const skipMsg = "GITIS submit skipped: page contains июнь-сентябрь";
-                logger.info(skipMsg, { target: targetDisplayLabel(target) });
-                await sentUser(skipMsg, gitisResult.statusCode, true, target, "key_false");
-              } else {
-                const pickedTime = await clickFirstAvailableGitisTime(target.page);
-                if (!pickedTime) {
-                  logger.error("GITIS submit flow: no available time slot found", {
-                    target: targetDisplayLabel(target)
-                  });
-                  return;
-                }
-                await new Promise((resolve) => setTimeout(resolve, 300));
-                const submitted = await clickGitisConfirmButton(target.page);
-                if (!submitted) {
-                  logger.error("GITIS submit flow: confirm button not found/clicked", {
-                    target: targetDisplayLabel(target)
-                  });
-                  return;
-                }
-                await new Promise((resolve) => setTimeout(resolve, 400));
-                try {
-                  const submitSnap = await target.page.content();
-                  const submitPath = await saveHtmlSnapshot(
-                    "key_false_submit",
-                    targetDisplayLabel(target),
-                    submitSnap
-                  );
-                  logger.info("Saved key_false_submit html snapshot", {
-                    target: targetDisplayLabel(target),
-                    path: submitPath
-                  });
-                } catch (error) {
-                  logger.error("key_false_submit html snapshot failed", {
-                    target: targetDisplayLabel(target),
-                    error: String(error)
-                  });
-                }
-                await disableTargetInDb(target);
-                target.enabled = false;
-                target.requested = false;
-                if (browserClientRef) {
-                  await browserClientRef.closeTargetPage(target);
-                }
+            if (!canSubmitByDate) {
+              const skipMsg = `${targetDisplayLabel(target)}: submit пропущен, дата ${pickedDate} не раньше порога ${gitisSubmitBeforeDate}`;
+              logger.info(skipMsg, {
+                target: targetDisplayLabel(target),
+                pickedDate,
+                gitisSubmitBeforeDate
+              });
+              await sentUser(skipMsg, gitisResult.statusCode, true, target, "key_ok");
+              return;
+            }
+
+            if (gitisSubmitEnabled) {
+              const pickedTime = await clickFirstAvailableGitisTime(target.page);
+              if (!pickedTime) {
+                logger.error("GITIS submit flow: no available time slot found", {
+                  target: targetDisplayLabel(target)
+                });
+                return;
               }
+              await new Promise((resolve) => setTimeout(resolve, 300));
+              const submitted = await clickGitisConfirmButton(target.page);
+              if (!submitted) {
+                logger.error("GITIS submit flow: confirm button not found/clicked", {
+                  target: targetDisplayLabel(target)
+                });
+                return;
+              }
+              await new Promise((resolve) => setTimeout(resolve, 400));
+              try {
+                const submitSnap = await target.page.content();
+                const submitPath = await saveHtmlSnapshot(
+                  "key_false_submit",
+                  targetDisplayLabel(target),
+                  submitSnap
+                );
+                logger.info("Saved key_false_submit html snapshot", {
+                  target: targetDisplayLabel(target),
+                  path: submitPath
+                });
+              } catch (error) {
+                logger.error("key_false_submit html snapshot failed", {
+                  target: targetDisplayLabel(target),
+                  error: String(error)
+                });
+              }
+              await disableTargetInDb(target);
+              target.enabled = false;
+              target.requested = false;
+              if (browserClientRef) {
+                await browserClientRef.closeTargetPage(target);
+              }
+            } else {
+              logger.info("GITIS submit disabled by env flag after date threshold check", {
+                target: targetDisplayLabel(target),
+                pickedDate,
+                gitisSubmitBeforeDate
+              });
             }
           }
         }
@@ -795,6 +816,11 @@ async function checkSiteRgsi(targets: RuntimeTarget[]): Promise<void> {
 }
 
 export async function runMonitor(targets: MonitorTarget[]): Promise<void> {
+  logger.info("GITIS submit date threshold configured", {
+    gitisSubmitBeforeDate,
+    gitisSubmitEnabled
+  });
+
   const urlToTargetId = new Map<string, number>();
 
   for (const target of targets) {
