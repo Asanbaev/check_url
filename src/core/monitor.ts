@@ -101,12 +101,24 @@ function bodyForTelegramHtmlMode(msg: string): string {
   return escapeTelegramHtmlPlain(msg);
 }
 
-function clickableTelegramMessage(msg: string, targetUrl: string, telegramParseMode?: "HTML"): string {
+function clickableTelegramMessage(
+  msg: string,
+  targetUrl: string,
+  telegramParseMode?: "HTML",
+  resourceStatus?: ResourceStatus
+): string {
   const url = targetUrl.trim();
+  const isKeyFalse = resourceStatus === "key_false";
+  const emphasize = (text: string) => (isKeyFalse ? `🔴 <b>${text}</b>` : text);
   if (!url) {
-    return telegramParseMode === "HTML" ? bodyForTelegramHtmlMode(msg) : escapeTelegramHtmlPlain(msg);
+    if (telegramParseMode === "HTML") {
+      return emphasize(bodyForTelegramHtmlMode(msg));
+    }
+    return escapeTelegramHtmlPlain(msg);
   }
-  const body = telegramParseMode === "HTML" ? bodyForTelegramHtmlMode(msg) : escapeTelegramHtmlPlain(msg);
+  const body = telegramParseMode === "HTML"
+    ? emphasize(bodyForTelegramHtmlMode(msg))
+    : escapeTelegramHtmlPlain(msg);
   return `<a href="${escapeTelegramHtmlAttr(url)}">${body}</a>`;
 }
 
@@ -276,7 +288,7 @@ async function sentUser(
 
   if (shouldNotify) {
     const targetId = targetIdMap.get(target.url);
-    const telegramMessage = clickableTelegramMessage(msg, target.url, telegramParseMode);
+    const telegramMessage = clickableTelegramMessage(msg, target.url, telegramParseMode, resourceStatus);
     if (targetId) {
       await publishAlert({
         targetId,
@@ -322,7 +334,7 @@ async function sendTelegramStepNotification(
     targetName: targetDisplayLabel(target),
     targetUrl: target.url,
     status: resourceStatus,
-    message: clickableTelegramMessage(msg, target.url),
+    message: clickableTelegramMessage(msg, target.url, undefined, resourceStatus),
     telegramParseMode: "HTML"
   });
 }
@@ -485,6 +497,8 @@ async function puppeteerDebug(target: RuntimeTarget): Promise<void> {
     if (target.theaterId === "GITIS") {
       const gitisResult = await runGitisPipeline(target.page, targetDisplayLabel(target), target.successText);
       if (gitisResult.kind === "booking_success") {
+        // После submit может быть уже отправлен key_false; сбрасываем, чтобы success-уведомление не подавилось как дубль.
+        target.lastAlertResourceStatus = undefined;
         await sentUser(gitisResult.message, 2, true, target, "key_false");
         try {
           const snap = await target.page.content();
@@ -502,9 +516,9 @@ async function puppeteerDebug(target: RuntimeTarget): Promise<void> {
         await disableTargetInDb(target);
         target.enabled = false;
         target.requested = false;
-        if (browserClientRef) {
-          await browserClientRef.closeTargetPage(target);
-        }
+        logger.info("GITIS booking_success: target disabled, tab left open", {
+          target: targetDisplayLabel(target)
+        });
         return;
       }
       if (gitisResult.kind === "modal_missing") {
@@ -607,12 +621,36 @@ async function puppeteerDebug(target: RuntimeTarget): Promise<void> {
                   error: String(error)
                 });
               }
-              await disableTargetInDb(target);
-              target.enabled = false;
-              target.requested = false;
-              if (browserClientRef) {
-                await browserClientRef.closeTargetPage(target);
+              await new Promise((resolve) => setTimeout(resolve, 400));
+              try {
+                const submitResultSnap = await target.page.content();
+                const submitResultPath = await saveHtmlSnapshot(
+                  "ey_false_submit_result",
+                  targetDisplayLabel(target),
+                  submitResultSnap
+                );
+                logger.info("Saved ey_false_submit_result html snapshot", {
+                  target: targetDisplayLabel(target),
+                  path: submitResultPath
+                });
+              } catch (error) {
+                logger.error("ey_false_submit_result html snapshot failed", {
+                  target: targetDisplayLabel(target),
+                  error: String(error)
+                });
               }
+              await sentUser(
+                `${targetDisplayLabel(target)}: submit выполнен, ожидаем подтверждение фразой успешной записи`,
+                gitisResult.statusCode,
+                true,
+                target,
+                "key_false"
+              );
+              logger.info("GITIS submit completed: target kept enabled until booking_success phrase", {
+                target: targetDisplayLabel(target),
+                pickedDate,
+                gitisSubmitBeforeDate
+              });
             } else {
               logger.info("GITIS submit disabled by env flag after date threshold check", {
                 target: targetDisplayLabel(target),
