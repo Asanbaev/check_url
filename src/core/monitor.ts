@@ -461,7 +461,7 @@ async function puppeteerDebug(target: RuntimeTarget): Promise<void> {
     let content = rawContent.toLowerCase();
     if (isBrowserErrorPage(content)) {
       target.availabilityState = "down";
-      await sentUser(`Сайт _${targetDisplayLabel(target)}_ недоступен (browser_error_page)`, 1, true, target, "unreachable");
+      await sentUser(`${targetDisplayLabel(target)}_ недоступен (browser_error_page)`, 1, true, target, "unreachable");
       return;
     }
     target.availabilityState = "up";
@@ -483,8 +483,11 @@ async function puppeteerDebug(target: RuntimeTarget): Promise<void> {
           // if (browser) {
           //   await runVgikMaiFacultyFlow(browser, rawContent, targetDisplayLabel(target));
           // }
-        } else if (msgElapsedHours >= msgMinValue || target.stage !== 0) {
-          await sentUser(`${targetDisplayLabel(target)}: Новых дат на май пока нет`, 0, true, target, "key_ok");
+        } else {
+          await writeStatusLogIfDue(target, "key_ok", `${targetDisplayLabel(target)}: Новых дат на май пока нет`);
+          if (msgElapsedHours >= msgMinValue || target.stage !== 0) {
+            await sentUser(`${targetDisplayLabel(target)}: Новых дат на май пока нет`, 0, true, target, "key_ok");
+          }
         }
         return;
       }
@@ -523,7 +526,7 @@ async function puppeteerDebug(target: RuntimeTarget): Promise<void> {
       }
       if (gitisResult.kind === "modal_missing") {
         if (wasDownBeforeCheck) {
-          await sentUser(`Сайт _${targetDisplayLabel(target)}_ недоступен (browser_error_page)`, 1, true, target, "unreachable");
+          await sentUser(`${targetDisplayLabel(target)}_ недоступен (browser_error_page)`, 1, true, target, "unreachable");
           return;
         }
         await sentUser(gitisResult.message, 0, true, target, "key_error");
@@ -710,10 +713,10 @@ async function puppeteerDebug(target: RuntimeTarget): Promise<void> {
       message.includes("Navigation timeout")
     ) {
       target.availabilityState = "down";
-      await sentUser(`Сайт _${targetDisplayLabel(target)}_ недоступен (${message})`, 1, true, target, "unreachable");
+      await sentUser(`${targetDisplayLabel(target)}_ недоступен (${message})`, 1, true, target, "unreachable");
     } else {
       target.availabilityState = "down";
-      await sentUser(`Сайт _${targetDisplayLabel(target)}_ недоступен (${message})`, 1, true, target, "unreachable");
+      await sentUser(`${targetDisplayLabel(target)}_ недоступен (${message})`, 1, true, target, "unreachable");
     }
   } finally {
     target.requested = false;
@@ -725,16 +728,15 @@ async function checkURL(target: RuntimeTarget): Promise<void> {
     if (!target.enabled) {
       return;
     }
-    if (!target.page) {
-      if (target.theaterId === "GITIS" && browserClientRef) {
-        const rebound = await browserClientRef.rebindGitisTargetPage(target);
-        if (rebound) {
-          logger.info("GITIS page rebound by URL match", { target: targetDisplayLabel(target), url: target.url });
-        }
+    if (!target.page && browserClientRef) {
+      const rebound = await browserClientRef.rebindTargetPage(target);
+      if (rebound) {
+        logger.info("Target page rebound by URL match", { target: targetDisplayLabel(target), url: target.url });
       }
     }
     if (!target.page) {
       logger.info("checkURL skipped: no bound page", { target: targetDisplayLabel(target), theaterId: target.theaterId });
+      await writeStatusLogIfDue(target, "error", `${targetDisplayLabel(target)}: page not bound`);
       return;
     }
     if (target.requested) {
@@ -833,7 +835,9 @@ async function checkSite(targets: RuntimeTarget[]): Promise<void> {
         setTimeout(() => void checkURL(targets[i]), 1000 * i);
       }
     }
-    await cleanupOldStatusLogs();
+    cleanupOldStatusLogs().catch((error) => {
+      logger.error("cleanupOldStatusLogs: async call failed", { error: String(error) });
+    });
     if (stuckText !== "") {
       await sentUser(`Страницы не обновляются ${stuckText}`, 1, true, targets[0], "error");
     }

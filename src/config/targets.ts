@@ -54,7 +54,7 @@ export const targets: MonitorTarget[] = [
   {
     name: "Кудряшов",
     theaterId: "GITIS",
-    enabled: true,
+    enabled: false,
     url: "https://admission.gitis.net/244",
     searchText: "Свободных дат пока нет",
     searchMode: "contains",

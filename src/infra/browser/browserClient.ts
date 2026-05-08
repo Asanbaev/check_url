@@ -192,7 +192,14 @@ export class BrowserClient {
   }
 
   async rebindGitisTargetPage(target: RuntimeTarget): Promise<boolean> {
-    if (!this.browser || target.theaterId !== "GITIS") {
+    if (target.theaterId !== "GITIS") {
+      return false;
+    }
+    return this.rebindTargetPage(target);
+  }
+
+  async rebindTargetPage(target: RuntimeTarget): Promise<boolean> {
+    if (!this.browser) {
       return false;
     }
     let pages: Page[] = [];
@@ -200,13 +207,13 @@ export class BrowserClient {
       pages = await this.browser.pages();
     } catch (error) {
       if (!this.isNetworkEnableTimeout(error)) {
-        logger.error("rebindGitisTargetPage: browser.pages failed", {
+        logger.error("rebindTargetPage: browser.pages failed", {
           target: targetDisplayLabel(target),
           error: String(error)
         });
         return false;
       }
-      logger.error("rebindGitisTargetPage: Network.enable timeout, reconnecting", {
+      logger.error("rebindTargetPage: Network.enable timeout, reconnecting", {
         target: targetDisplayLabel(target),
         error: String(error)
       });
