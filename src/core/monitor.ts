@@ -37,6 +37,9 @@ const keyFalseSaveFullPageHtml =
   process.env.SAVE_PAGE_HTML === "1" || process.env.SAVE_PAGE_HTML === "true";
 const requestStuckTimeoutMs = Number(process.env.REQUEST_STUCK_TIMEOUT_MS ?? "60000");
 const pageGotoTimeoutMs = Number(process.env.BROWSER_PAGE_GOTO_TIMEOUT_MS ?? "20000");
+const waitForIframeTimeoutMs = Number(process.env.WAIT_FOR_IFRAME_TIMEOUT_MS ?? "12000");
+const saveCloudflareHtml =
+  process.env.SAVE_CLOUDFLARE_HTML === "1" || process.env.SAVE_CLOUDFLARE_HTML === "true";
 const gitisSubmitEnabled =
   (process.env.GITIS_SUBMIT_ENABLED ?? "false").trim().toLowerCase() === "true";
 const gitisSubmitBeforeDate = (process.env.GITIS_SUBMIT_BEFORE_DATE ?? "2026-06-01").trim();
@@ -339,6 +342,30 @@ async function sendTelegramStepNotification(
   });
 }
 
+async function saveCloudflareSnapshotIfEnabled(
+  target: RuntimeTarget,
+  html: string,
+  phase: "paused" | "pre_wait" | "post_wait"
+): Promise<void> {
+  if (!saveCloudflareHtml) {
+    return;
+  }
+  try {
+    const savedPath = await saveHtmlSnapshot(`auth_cloudflare_${phase}`, targetDisplayLabel(target), html);
+    logger.info("Saved Cloudflare html snapshot", {
+      target: targetDisplayLabel(target),
+      phase,
+      path: savedPath
+    });
+  } catch (error) {
+    logger.error("Cloudflare html snapshot failed", {
+      target: targetDisplayLabel(target),
+      phase,
+      error: String(error)
+    });
+  }
+}
+
 async function puppeteerDebug(target: RuntimeTarget): Promise<void> {
   if (!target.page) {
     throw new Error(`Page is not initialized for ${targetDisplayLabel(target)}`);
@@ -354,6 +381,7 @@ async function puppeteerDebug(target: RuntimeTarget): Promise<void> {
     if (vgikCf && target.vgikCfChallengePaused) {
       rawContent = await target.page.content();
       if (pageLooksLikeVgikCloudflareChallenge(rawContent)) {
+        await saveCloudflareSnapshotIfEnabled(target, rawContent, "paused");
         target.requested = false;
         return;
       }
@@ -390,6 +418,7 @@ async function puppeteerDebug(target: RuntimeTarget): Promise<void> {
     if (target.waitForSelector && vgikCf) {
       const preWaitHtml = await target.page.content();
       if (pageLooksLikeVgikCloudflareChallenge(preWaitHtml)) {
+        await saveCloudflareSnapshotIfEnabled(target, preWaitHtml, "pre_wait");
         target.vgikCfChallengePaused = true;
         if (!target.vgikCfChallengeNotifySent) {
           await sentUser(
@@ -408,8 +437,11 @@ async function puppeteerDebug(target: RuntimeTarget): Promise<void> {
 
     if (target.waitForSelector) {
       let exists = false;
+      let selectorTimedOut = false;
       try {
-        await target.page.waitForSelector('iframe[name^="tpw__"]');
+        await target.page.waitForSelector('iframe[name^="tpw__"]', {
+          timeout: waitForIframeTimeoutMs
+        });
         const iframeElement = await target.page.$('iframe[name^="tpw__"]');
         const frame = await iframeElement?.contentFrame();
         if (frame) {
@@ -423,10 +455,31 @@ async function puppeteerDebug(target: RuntimeTarget): Promise<void> {
           });
         }
       } catch (error) {
-        logger.error("error_puppeteerDebug не дождался", { dateNow, target: targetDisplayLabel(target), error: String(error) });
-        exists = true;
+        const waitError = String(error);
+        const isSelectorTimeout =
+          waitError.includes("Waiting for selector") || waitError.includes("timeout") || waitError.includes("TimeoutError");
+        if (isSelectorTimeout) {
+          selectorTimedOut = true;
+          logger.error("waitForSelector timeout", {
+            dateNow,
+            target: targetDisplayLabel(target),
+            timeoutMs: waitForIframeTimeoutMs,
+            error: waitError
+          });
+        } else {
+          throw error;
+        }
       } finally {
         target.requested = false;
+      }
+
+      if (selectorTimedOut) {
+        await writeStatusLogIfDue(
+          target,
+          "key_error",
+          `${targetDisplayLabel(target)}: waitForSelector timeout ${waitForIframeTimeoutMs}ms (iframe not ready)`
+        );
+        return;
       }
 
       if (!exists) {
@@ -442,6 +495,7 @@ async function puppeteerDebug(target: RuntimeTarget): Promise<void> {
     }
 
     if (vgikCf && pageLooksLikeVgikCloudflareChallenge(rawContent)) {
+      await saveCloudflareSnapshotIfEnabled(target, rawContent, "post_wait");
       target.vgikCfChallengePaused = true;
       if (!target.vgikCfChallengeNotifySent) {
         await sentUser(
