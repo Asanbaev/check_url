@@ -11,6 +11,7 @@ import {
 import {
   isVgikMaiFacultyPage,
   pageLooksLikeVgikCloudflareChallenge,
+  pageShowsVgikCloudflareVerifying,
   pickBestNewTimepadEventUrl,
   runVgikMaiFacultyFlow,
   runVgikMode3SubmitLoop
@@ -366,6 +367,37 @@ async function saveCloudflareSnapshotIfEnabled(
   }
 }
 
+/**
+ * Если видим промежуточный экран Cloudflare, ждём его завершения (5x2с) и продолжаем проверку.
+ */
+async function waitForVgikCloudflareVerifyingToFinish(target: RuntimeTarget, html: string): Promise<boolean> {
+  if (!pageShowsVgikCloudflareVerifying(html) || !target.page) {
+    return false;
+  }
+  for (let i = 0; i < 5; i += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 2000));
+    const nextHtml = await target.page.content();
+    if (!pageShowsVgikCloudflareVerifying(nextHtml)) {
+      // Double-check after a short delay: Cloudflare may switch back to verification/challenge.
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+      const confirmHtml = await target.page.content();
+      if (pageShowsVgikCloudflareVerifying(confirmHtml)) {
+        logger.info("Cloudflare verifying phrase returned on confirm pass", {
+          target: targetDisplayLabel(target),
+          attemptsUsed: i + 1
+        });
+        return false;
+      }
+      logger.info("Cloudflare verifying phrase disappeared, continue normal flow", {
+        target: targetDisplayLabel(target),
+        attemptsUsed: i + 1
+      });
+      return true;
+    }
+  }
+  return false;
+}
+
 async function puppeteerDebug(target: RuntimeTarget): Promise<void> {
   if (!target.page) {
     throw new Error(`Page is not initialized for ${targetDisplayLabel(target)}`);
@@ -381,9 +413,19 @@ async function puppeteerDebug(target: RuntimeTarget): Promise<void> {
     if (vgikCf && target.vgikCfChallengePaused) {
       rawContent = await target.page.content();
       if (pageLooksLikeVgikCloudflareChallenge(rawContent)) {
+        const verifyingGone = await waitForVgikCloudflareVerifyingToFinish(target, rawContent);
+        if (verifyingGone) {
+          target.vgikCfChallengePaused = false;
+          target.vgikCfChallengeNotifySent = false;
+          skipReload = true;
+          logger.info("VGIK Cloudflare: verification text disappeared in pause mode", {
+            target: targetDisplayLabel(target)
+          });
+        } else {
         await saveCloudflareSnapshotIfEnabled(target, rawContent, "paused");
         target.requested = false;
         return;
+        }
       }
       target.vgikCfChallengePaused = false;
       target.vgikCfChallengeNotifySent = false;
@@ -418,6 +460,12 @@ async function puppeteerDebug(target: RuntimeTarget): Promise<void> {
     if (target.waitForSelector && vgikCf) {
       const preWaitHtml = await target.page.content();
       if (pageLooksLikeVgikCloudflareChallenge(preWaitHtml)) {
+        const verifyingGone = await waitForVgikCloudflareVerifyingToFinish(target, preWaitHtml);
+        if (verifyingGone) {
+          logger.info("VGIK Cloudflare: verification text disappeared before waitForSelector", {
+            target: targetDisplayLabel(target)
+          });
+        } else {
         await saveCloudflareSnapshotIfEnabled(target, preWaitHtml, "pre_wait");
         target.vgikCfChallengePaused = true;
         if (!target.vgikCfChallengeNotifySent) {
@@ -432,6 +480,7 @@ async function puppeteerDebug(target: RuntimeTarget): Promise<void> {
         }
         target.requested = false;
         return;
+        }
       }
     }
 
@@ -495,6 +544,12 @@ async function puppeteerDebug(target: RuntimeTarget): Promise<void> {
     }
 
     if (vgikCf && pageLooksLikeVgikCloudflareChallenge(rawContent)) {
+      const verifyingGone = await waitForVgikCloudflareVerifyingToFinish(target, rawContent);
+      if (verifyingGone) {
+        logger.info("VGIK Cloudflare: verification text disappeared after content read", {
+          target: targetDisplayLabel(target)
+        });
+      } else {
       await saveCloudflareSnapshotIfEnabled(target, rawContent, "post_wait");
       target.vgikCfChallengePaused = true;
       if (!target.vgikCfChallengeNotifySent) {
@@ -509,6 +564,7 @@ async function puppeteerDebug(target: RuntimeTarget): Promise<void> {
       }
       target.requested = false;
       return;
+      }
     }
 
     const wasDownBeforeCheck = target.availabilityState === "down";

@@ -24,10 +24,19 @@ export function isVgikMaiFacultyPage(pageUrl: string): boolean {
 
 /** Маркер страницы проверки Cloudflare (Timepad / см. сохранённые HTML). */
 const VGIK_CLOUDFLARE_HTML_MARKER = "использует сервис безопасности для защиты";
+const VGIK_CLOUDFLARE_VERIFYING_MARKER = "выполнение проверки безопасности";
 
 export function pageLooksLikeVgikCloudflareChallenge(html: string): boolean {
   const collapsed = html.replace(/\s+/g, " ").toLowerCase();
   return collapsed.includes(VGIK_CLOUDFLARE_HTML_MARKER);
+}
+
+/**
+ * Промежуточный этап Cloudflare: страница ещё проверяет посетителя перед пропуском дальше.
+ */
+export function pageShowsVgikCloudflareVerifying(html: string): boolean {
+  const collapsed = html.replace(/\s+/g, " ").toLowerCase();
+  return collapsed.includes(VGIK_CLOUDFLARE_VERIFYING_MARKER);
 }
 
 /**
