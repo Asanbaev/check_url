@@ -367,6 +367,34 @@ async function saveCloudflareSnapshotIfEnabled(
   }
 }
 
+/**
+ * Временный debug: сохраняем HTML при Navigation timeout только для VGIK_Федоров_14.
+ */
+async function saveVgikFedorov14TimeoutSnapshotIfNeeded(
+  target: RuntimeTarget,
+  message: string
+): Promise<void> {
+  const isFedorov14 = targetDisplayLabel(target) === "VGIK_Федоров_14";
+  const isNavigationTimeout = message.includes("Navigation timeout");
+  if (!isFedorov14 || !isNavigationTimeout || !target.page) {
+    return;
+  }
+  try {
+    const html = await target.page.content();
+    const savedPath = await saveHtmlSnapshot("unreachable_timeout_debug", targetDisplayLabel(target), html);
+    logger.info("Saved timeout debug html snapshot", {
+      target: targetDisplayLabel(target),
+      path: savedPath,
+      reason: "navigation_timeout"
+    });
+  } catch (error) {
+    logger.error("Timeout debug html snapshot failed", {
+      target: targetDisplayLabel(target),
+      error: String(error)
+    });
+  }
+}
+
 type VgikCloudflareVerifyingResult = {
   resolved: boolean;
   confirmedHtml?: string;
@@ -846,6 +874,7 @@ async function puppeteerDebug(target: RuntimeTarget): Promise<void> {
   } catch (error) {
     const message = String(error);
     logger.error("error_puppeteerDebug", { dateNow, target: targetDisplayLabel(target), error: message });
+    await saveVgikFedorov14TimeoutSnapshotIfNeeded(target, message);
     if (
       message.includes("ERR_NAME_NOT_RESOLVED") ||
       message.includes("ERR_CONNECTION") ||
