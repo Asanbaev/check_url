@@ -355,8 +355,7 @@ async function saveCloudflareSnapshotIfEnabled(
     const savedPath = await saveHtmlSnapshot(`auth_cloudflare_${phase}`, targetDisplayLabel(target), html);
     logger.info("Saved Cloudflare html snapshot", {
       target: targetDisplayLabel(target),
-      phase,
-      path: savedPath
+      phase
     });
   } catch (error) {
     logger.error("Cloudflare html snapshot failed", {
@@ -374,9 +373,40 @@ async function saveVgikFedorov14TimeoutSnapshotIfNeeded(
   target: RuntimeTarget,
   message: string
 ): Promise<void> {
-  const isFedorov14 = targetDisplayLabel(target) === "VGIK_Федоров_14";
+  const isFedorov14 =
+    targetDisplayLabel(target) === "VGIK_Федоров_14" || target.url.includes("/event/3951191/");
   const isNavigationTimeout = message.includes("Navigation timeout");
-  if (!isFedorov14 || !isNavigationTimeout || !target.page) {
+  if (!isFedorov14 || !isNavigationTimeout) {
+    return;
+  }
+  const fallbackHtml = [
+    "<html><body>",
+    `<h3>unreachable timeout debug</h3>`,
+    `<p>target: ${targetDisplayLabel(target)}</p>`,
+    `<p>url: ${target.url}</p>`,
+    `<p>message: ${message.replace(/</g, "&lt;")}</p>`,
+    `<p>at: ${nowMoscowString()}</p>`,
+    "</body></html>"
+  ].join("");
+
+  if (!target.page) {
+    try {
+      const savedPath = await saveHtmlSnapshot(
+        "unreachable_timeout_debug_no_page",
+        targetDisplayLabel(target),
+        fallbackHtml
+      );
+      logger.info("Saved timeout debug html snapshot (no page)", {
+        target: targetDisplayLabel(target),
+        path: savedPath,
+        reason: "navigation_timeout"
+      });
+    } catch (error) {
+      logger.error("Timeout debug html snapshot failed (no page)", {
+        target: targetDisplayLabel(target),
+        error: String(error)
+      });
+    }
     return;
   }
   try {
@@ -388,10 +418,27 @@ async function saveVgikFedorov14TimeoutSnapshotIfNeeded(
       reason: "navigation_timeout"
     });
   } catch (error) {
-    logger.error("Timeout debug html snapshot failed", {
+    logger.error("Timeout debug html snapshot failed, saving fallback", {
       target: targetDisplayLabel(target),
       error: String(error)
     });
+    try {
+      const savedPath = await saveHtmlSnapshot(
+        "unreachable_timeout_debug_fallback",
+        targetDisplayLabel(target),
+        fallbackHtml
+      );
+      logger.info("Saved timeout debug fallback html snapshot", {
+        target: targetDisplayLabel(target),
+        path: savedPath,
+        reason: "navigation_timeout_content_error"
+      });
+    } catch (fallbackError) {
+      logger.error("Timeout debug fallback html snapshot failed", {
+        target: targetDisplayLabel(target),
+        error: String(fallbackError)
+      });
+    }
   }
 }
 
@@ -401,7 +448,7 @@ type VgikCloudflareVerifyingResult = {
 };
 
 /**
- * Если видим промежуточный экран Cloudflare, ждём его завершения (5x2с) и продолжаем проверку.
+ * Если видим промежуточный экран Cloudflare, ждём его завершения (7x3с) и продолжаем проверку.
  */
 async function waitForVgikCloudflareVerifyingToFinish(
   target: RuntimeTarget,
@@ -410,8 +457,8 @@ async function waitForVgikCloudflareVerifyingToFinish(
   if (!pageShowsVgikCloudflareVerifying(html) || !target.page) {
     return { resolved: false };
   }
-  for (let i = 0; i < 5; i += 1) {
-    await new Promise((resolve) => setTimeout(resolve, 2000));
+  for (let i = 0; i < 7; i += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 3000));
     const nextHtml = await target.page.content();
     if (!pageShowsVgikCloudflareVerifying(nextHtml)) {
       // Double-check after a short delay: Cloudflare may switch back to verification/challenge.
