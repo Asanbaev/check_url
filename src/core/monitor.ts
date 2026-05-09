@@ -21,6 +21,7 @@ import { logger } from "../infra/logging/logger";
 import { saveHtmlSnapshot } from "../infra/logging/outputHtmlLogger";
 import { BrowserClient, RuntimeTarget } from "../infra/browser/browserClient";
 import { withDbRetry } from "../infra/db/retryDb";
+import { OutboundPostRequest } from "../infra/db/outboundPostRequest.model";
 import { ResourceStatus, ResourceStatusLog } from "../infra/db/resourceStatusLog.model";
 import { ResourceTarget } from "../infra/db/resourceTarget.model";
 
@@ -53,7 +54,7 @@ const nightIntervalMultiplier = Number(process.env.NIGHT_INTERVAL_MULTIPLIER ?? 
 let intTime = Number(process.env.CHECK_INTERVAL_MS ?? "20000");
 let urlPast: boolean[] = [];
 let targetIdMap = new Map<string, number>();
-let lastCleanupMinute: string | null = null;
+let lastCleanupHour: string | null = null;
 let browserClientRef: BrowserClient | null = null;
 
 function isIsoDate(s: string): boolean {
@@ -224,6 +225,7 @@ async function writeStatusLogIfDue(
   const statusChangedSinceLastDbWrite = target.lastStatusDbLoggedStatus !== undefined
     && target.lastStatusDbLoggedStatus !== status;
   const bypassInterval = status === "key_false" || statusChangedSinceLastDbWrite;
+  let intervalElapsed = true;
   if (last && !bypassInterval) {
     const tNow = parseMoscowTimestamp(nowIso);
     const tLast = parseMoscowTimestamp(last);
@@ -232,13 +234,14 @@ async function writeStatusLogIfDue(
     } else {
       const elapsedMin = Math.round(tNow.diff(tLast, "minutes").minutes * 100) / 100;
       if (elapsedMin < statusDbLogIntervalMin) {
+        intervalElapsed = false;
         return false;
       }
     }
   }
 
   const lastDbStatus = await getLastDbStatusForTarget(target);
-  if (lastDbStatus === status) {
+  if (lastDbStatus === status && !bypassInterval && !intervalElapsed) {
     target.lastStatusDbLoggedAt = nowIso;
     target.lastStatusDbLoggedStatus = status;
     return false;
@@ -253,8 +256,8 @@ async function writeStatusLogIfDue(
 }
 
 async function cleanupOldStatusLogs(): Promise<void> {
-  const minuteKey = DateTime.local().setZone("Europe/Moscow").toFormat("yyyy-LL-dd HH:mm");
-  if (lastCleanupMinute === minuteKey) {
+  const hourKey = DateTime.local().setZone("Europe/Moscow").toFormat("yyyy-LL-dd HH");
+  if (lastCleanupHour === hourKey) {
     return;
   }
   const thresholdStr = DateTime.now().setZone("Europe/Moscow").minus({ days: 2 }).toFormat("yyyy-LL-dd HH:mm:ss");
@@ -269,7 +272,16 @@ async function cleanupOldStatusLogs(): Promise<void> {
         }
       })
     );
-    lastCleanupMinute = minuteKey;
+    await withDbRetry(`cleanupOldStatusLogs.destroy request threshold=${thresholdStr}`, async () =>
+      OutboundPostRequest.destroy({
+        where: {
+          created_at: {
+            [Op.lt]: literal(`'${esc}'`)
+          }
+        }
+      })
+    );
+    lastCleanupHour = hourKey;
   } catch (error) {
     logger.error("cleanupOldStatusLogs: delete failed", { error: String(error), thresholdStr });
   }
@@ -511,7 +523,7 @@ async function waitForVgikCloudflareVerifyingToFinish(
         });
         return { resolved: false };
       }
-      logger.info("Cloudflare verifying phrase disappeared, continue normal flow", {
+      logger.info("Cloudflare-disappeared, continue..", {
         target: targetDisplayLabel(target),
         attemptsUsed: i + 1
       });
@@ -598,7 +610,7 @@ async function puppeteerDebug(target: RuntimeTarget): Promise<void> {
       if (pageLooksLikeVgikCloudflareChallenge(preWaitHtml)) {
         const verifying = await waitForVgikCloudflareVerifyingToFinish(target, preWaitHtml);
         if (verifying.resolved) {
-          logger.info("VGIK Cloudflare: verification text disappeared before waitForSelector", {
+          logger.info("VGIK Cloudflare: disappeared before wS1", {
             target: targetDisplayLabel(target)
           });
         } else {
