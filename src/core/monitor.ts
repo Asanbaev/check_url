@@ -367,12 +367,20 @@ async function saveCloudflareSnapshotIfEnabled(
   }
 }
 
+type VgikCloudflareVerifyingResult = {
+  resolved: boolean;
+  confirmedHtml?: string;
+};
+
 /**
  * Если видим промежуточный экран Cloudflare, ждём его завершения (5x2с) и продолжаем проверку.
  */
-async function waitForVgikCloudflareVerifyingToFinish(target: RuntimeTarget, html: string): Promise<boolean> {
+async function waitForVgikCloudflareVerifyingToFinish(
+  target: RuntimeTarget,
+  html: string
+): Promise<VgikCloudflareVerifyingResult> {
   if (!pageShowsVgikCloudflareVerifying(html) || !target.page) {
-    return false;
+    return { resolved: false };
   }
   for (let i = 0; i < 5; i += 1) {
     await new Promise((resolve) => setTimeout(resolve, 2000));
@@ -386,16 +394,20 @@ async function waitForVgikCloudflareVerifyingToFinish(target: RuntimeTarget, htm
           target: targetDisplayLabel(target),
           attemptsUsed: i + 1
         });
-        return false;
+        return { resolved: false };
       }
       logger.info("Cloudflare verifying phrase disappeared, continue normal flow", {
         target: targetDisplayLabel(target),
         attemptsUsed: i + 1
       });
-      return true;
+      return { resolved: true };
     }
   }
-  return false;
+  const confirmedHtml = await target.page.content();
+  if (pageShowsVgikCloudflareVerifying(confirmedHtml)) {
+    return { resolved: false, confirmedHtml };
+  }
+  return { resolved: false };
 }
 
 async function puppeteerDebug(target: RuntimeTarget): Promise<void> {
@@ -413,8 +425,8 @@ async function puppeteerDebug(target: RuntimeTarget): Promise<void> {
     if (vgikCf && target.vgikCfChallengePaused) {
       rawContent = await target.page.content();
       if (pageLooksLikeVgikCloudflareChallenge(rawContent)) {
-        const verifyingGone = await waitForVgikCloudflareVerifyingToFinish(target, rawContent);
-        if (verifyingGone) {
+        const verifying = await waitForVgikCloudflareVerifyingToFinish(target, rawContent);
+        if (verifying.resolved) {
           target.vgikCfChallengePaused = false;
           target.vgikCfChallengeNotifySent = false;
           skipReload = true;
@@ -422,9 +434,15 @@ async function puppeteerDebug(target: RuntimeTarget): Promise<void> {
             target: targetDisplayLabel(target)
           });
         } else {
-        await saveCloudflareSnapshotIfEnabled(target, rawContent, "paused");
-        target.requested = false;
-        return;
+          if (verifying.confirmedHtml) {
+            logger.info("Saving Cloudflare snapshot after 5x2 verify timeout", {
+              target: targetDisplayLabel(target),
+              phase: "paused"
+            });
+            await saveCloudflareSnapshotIfEnabled(target, verifying.confirmedHtml, "paused");
+          }
+          target.requested = false;
+          return;
         }
       }
       target.vgikCfChallengePaused = false;
@@ -460,26 +478,32 @@ async function puppeteerDebug(target: RuntimeTarget): Promise<void> {
     if (target.waitForSelector && vgikCf) {
       const preWaitHtml = await target.page.content();
       if (pageLooksLikeVgikCloudflareChallenge(preWaitHtml)) {
-        const verifyingGone = await waitForVgikCloudflareVerifyingToFinish(target, preWaitHtml);
-        if (verifyingGone) {
+        const verifying = await waitForVgikCloudflareVerifyingToFinish(target, preWaitHtml);
+        if (verifying.resolved) {
           logger.info("VGIK Cloudflare: verification text disappeared before waitForSelector", {
             target: targetDisplayLabel(target)
           });
         } else {
-        await saveCloudflareSnapshotIfEnabled(target, preWaitHtml, "pre_wait");
-        target.vgikCfChallengePaused = true;
-        if (!target.vgikCfChallengeNotifySent) {
-          await sentUser(
-            `${targetDisplayLabel(target)}: Cloudflare`,
-            0,
-            true,
-            target,
-            "auth"
-          );
-          target.vgikCfChallengeNotifySent = true;
-        }
-        target.requested = false;
-        return;
+          if (verifying.confirmedHtml) {
+            logger.info("Saving Cloudflare snapshot after 5x2 verify timeout", {
+              target: targetDisplayLabel(target),
+              phase: "pre_wait"
+            });
+            await saveCloudflareSnapshotIfEnabled(target, verifying.confirmedHtml, "pre_wait");
+          }
+          target.vgikCfChallengePaused = true;
+          if (!target.vgikCfChallengeNotifySent) {
+            await sentUser(
+              `${targetDisplayLabel(target)}: Cloudflare`,
+              0,
+              true,
+              target,
+              "auth"
+            );
+            target.vgikCfChallengeNotifySent = true;
+          }
+          target.requested = false;
+          return;
         }
       }
     }
@@ -544,26 +568,32 @@ async function puppeteerDebug(target: RuntimeTarget): Promise<void> {
     }
 
     if (vgikCf && pageLooksLikeVgikCloudflareChallenge(rawContent)) {
-      const verifyingGone = await waitForVgikCloudflareVerifyingToFinish(target, rawContent);
-      if (verifyingGone) {
+      const verifying = await waitForVgikCloudflareVerifyingToFinish(target, rawContent);
+      if (verifying.resolved) {
         logger.info("VGIK Cloudflare: verification text disappeared after content read", {
           target: targetDisplayLabel(target)
         });
       } else {
-      await saveCloudflareSnapshotIfEnabled(target, rawContent, "post_wait");
-      target.vgikCfChallengePaused = true;
-      if (!target.vgikCfChallengeNotifySent) {
-        await sentUser(
-          `${targetDisplayLabel(target)}: Cloudflare`,
-          0,
-          true,
-          target,
-          "auth"
-        );
-        target.vgikCfChallengeNotifySent = true;
-      }
-      target.requested = false;
-      return;
+        if (verifying.confirmedHtml) {
+          logger.info("Saving Cloudflare snapshot after 5x2 verify timeout", {
+            target: targetDisplayLabel(target),
+            phase: "post_wait"
+          });
+          await saveCloudflareSnapshotIfEnabled(target, verifying.confirmedHtml, "post_wait");
+        }
+        target.vgikCfChallengePaused = true;
+        if (!target.vgikCfChallengeNotifySent) {
+          await sentUser(
+            `${targetDisplayLabel(target)}: Cloudflare`,
+            0,
+            true,
+            target,
+            "auth"
+          );
+          target.vgikCfChallengeNotifySent = true;
+        }
+        target.requested = false;
+        return;
       }
     }
 
