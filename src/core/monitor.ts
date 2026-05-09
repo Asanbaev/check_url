@@ -686,8 +686,13 @@ async function puppeteerDebug(target: RuntimeTarget): Promise<void> {
 
       if (!exists) {
         await sentUser(`${targetDisplayLabel(target)}: проверь, похоже открыта регистрация !!!!`, 0, true, target, "key_false");
-      } else if (target.msgElapsedHours >= msgMinValue || target.stage !== 0) {
-        await sentUser(`${targetDisplayLabel(target)}: закрыто`, 0, true, target, "key_ok");
+      } else {
+        // Всегда пишем в БД каждые 5 минут
+        await writeStatusLogIfDue(target, "key_ok", `${targetDisplayLabel(target)}: закрыто`);
+        // Но уведомления в Telegram только когда MSG_MIN_HOURS прошло
+        if (target.msgElapsedHours >= msgMinValue || target.stage !== 0) {
+          await sentUser(`${targetDisplayLabel(target)}: закрыто`, 0, true, target, "key_ok");
+        }
       }
       return;
     }
