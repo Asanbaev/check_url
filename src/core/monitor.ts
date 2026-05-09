@@ -184,6 +184,33 @@ async function writeStatusLog(target: RuntimeTarget, status: ResourceStatus, det
   }
 }
 
+/** Читает последний статус из status_log по target_id, чтобы отфильтровать дубли между инстансами. */
+async function getLastDbStatusForTarget(target: RuntimeTarget): Promise<ResourceStatus | null> {
+  const targetId = targetIdMap.get(target.url);
+  if (!targetId) {
+    return null;
+  }
+  try {
+    const lastRow = await withDbRetry(
+      `getLastDbStatusForTarget.findOne target=${targetDisplayLabel(target)}`,
+      async () =>
+        ResourceStatusLog.findOne({
+          where: { target_id: targetId },
+          attributes: ["status"],
+          order: [["id", "DESC"]]
+        })
+    );
+    return lastRow?.status ?? null;
+  } catch (error) {
+    logger.error("getLastDbStatusForTarget: select failed", {
+      target: targetDisplayLabel(target),
+      url: target.url,
+      error: String(error)
+    });
+    return null;
+  }
+}
+
 /** Запись в БД не чаще чем STATUS_DB_LOG_INTERVAL_MIN (на таргет). Исключение: `key_false` — пишем всегда, без ожидания интервала. */
 async function writeStatusLogIfDue(
   target: RuntimeTarget,
@@ -207,6 +234,14 @@ async function writeStatusLogIfDue(
       }
     }
   }
+
+  const lastDbStatus = await getLastDbStatusForTarget(target);
+  if (lastDbStatus === status) {
+    target.lastStatusDbLoggedAt = nowIso;
+    target.lastStatusDbLoggedStatus = status;
+    return false;
+  }
+
   const inserted = await writeStatusLog(target, status, details);
   if (inserted) {
     target.lastStatusDbLoggedAt = nowIso;
@@ -374,8 +409,8 @@ async function saveVgikFedorov14TimeoutSnapshotIfNeeded(
   message: string
 ): Promise<void> {
   const isFedorov14 =
-    targetDisplayLabel(target) === "VGIK_Федоров_14" || target.url.includes("/event/3951191/");
-  const isNavigationTimeout = message.includes("Navigation timeout");
+    targetDisplayLabel(target) === "VGIK_Федоров_14" || /\/event\/3951191(?:\/|$|\?)/.test(target.url);
+  const isNavigationTimeout = /navigation timeout/i.test(message);
   if (!isFedorov14 || !isNavigationTimeout) {
     return;
   }
@@ -410,7 +445,10 @@ async function saveVgikFedorov14TimeoutSnapshotIfNeeded(
     return;
   }
   try {
-    const html = await target.page.content();
+    const html = await Promise.race<string>([
+      target.page.content(),
+      new Promise<string>((resolve) => setTimeout(() => resolve(fallbackHtml), 2000))
+    ]);
     const savedPath = await saveHtmlSnapshot("unreachable_timeout_debug", targetDisplayLabel(target), html);
     logger.info("Saved timeout debug html snapshot", {
       target: targetDisplayLabel(target),
