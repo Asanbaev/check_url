@@ -23,7 +23,9 @@ export function isVgikMaiFacultyPage(pageUrl: string): boolean {
 }
 
 /** Маркер страницы проверки Cloudflare (Timepad / см. сохранённые HTML). */
+// здесь надо проверять подтвердите что вы человек, но текст надо точно скопировать 
 const VGIK_CLOUDFLARE_HTML_MARKER = "использует сервис безопасности для защиты";
+
 const VGIK_CLOUDFLARE_VERIFYING_MARKER = "выполнение проверки безопасности";
 
 export function pageLooksLikeVgikCloudflareChallenge(html: string): boolean {

@@ -41,6 +41,8 @@ const pageGotoTimeoutMs = Number(process.env.BROWSER_PAGE_GOTO_TIMEOUT_MS ?? "20
 const waitForIframeTimeoutMs = Number(process.env.WAIT_FOR_IFRAME_TIMEOUT_MS ?? "12000");
 const saveCloudflareHtml =
   process.env.SAVE_CLOUDFLARE_HTML === "1" || process.env.SAVE_CLOUDFLARE_HTML === "true";
+const logPageNavigated =
+  process.env.PAGE_NAVIGATED_LOG_ENABLED === "1" || process.env.PAGE_NAVIGATED_LOG_ENABLED === "true";
 const gitisSubmitEnabled =
   (process.env.GITIS_SUBMIT_ENABLED ?? "false").trim().toLowerCase() === "true";
 const gitisSubmitBeforeDate = (process.env.GITIS_SUBMIT_BEFORE_DATE ?? "2026-06-01").trim();
@@ -547,13 +549,12 @@ async function puppeteerDebug(target: RuntimeTarget): Promise<void> {
             target: targetDisplayLabel(target)
           });
         } else {
-          if (verifying.confirmedHtml) {
-            logger.info("Saving Cloudflare snapshot after 5x2 verify timeout", {
-              target: targetDisplayLabel(target),
-              phase: "paused"
-            });
-            await saveCloudflareSnapshotIfEnabled(target, verifying.confirmedHtml, "paused");
-          }
+          const snapshotHtml = verifying.confirmedHtml ?? rawContent;
+          logger.info("Saving Cloudflare snapshot after unresolved challenge", {
+            target: targetDisplayLabel(target),
+            phase: "paused"
+          });
+          await saveCloudflareSnapshotIfEnabled(target, snapshotHtml, "paused");
           target.requested = false;
           return;
         }
@@ -578,13 +579,17 @@ async function puppeteerDebug(target: RuntimeTarget): Promise<void> {
           waitUntil: "networkidle2",
           timeout: Number(process.env.BROWSER_PAGE_GOTO_TIMEOUT_MS ?? "20000")
         });
-        logger.info(`Page navigated ${targetDisplayLabel(target)}`);
+        if (logPageNavigated) {
+          logger.info(`Page navigated ${targetDisplayLabel(target)}`);
+        }
       } else {
         await target.page.reload({
           waitUntil: "networkidle2",
           timeout: Number(process.env.BROWSER_PAGE_GOTO_TIMEOUT_MS ?? "20000")
         });
-        logger.info(`Page navigated ${targetDisplayLabel(target)}`);
+        if (logPageNavigated) {
+          logger.info(`Page navigated ${targetDisplayLabel(target)}`);
+        }
       }
     }
 
@@ -597,13 +602,12 @@ async function puppeteerDebug(target: RuntimeTarget): Promise<void> {
             target: targetDisplayLabel(target)
           });
         } else {
-          if (verifying.confirmedHtml) {
-            logger.info("Saving Cloudflare snapshot after 5x2 verify timeout", {
-              target: targetDisplayLabel(target),
-              phase: "pre_wait"
-            });
-            await saveCloudflareSnapshotIfEnabled(target, verifying.confirmedHtml, "pre_wait");
-          }
+          const snapshotHtml = verifying.confirmedHtml ?? preWaitHtml;
+          logger.info("Saving Cloudflare snapshot after unresolved challenge", {
+            target: targetDisplayLabel(target),
+            phase: "pre_wait"
+          });
+          await saveCloudflareSnapshotIfEnabled(target, snapshotHtml, "pre_wait");
           target.vgikCfChallengePaused = true;
           if (!target.vgikCfChallengeNotifySent) {
             await sentUser(
@@ -687,13 +691,12 @@ async function puppeteerDebug(target: RuntimeTarget): Promise<void> {
           target: targetDisplayLabel(target)
         });
       } else {
-        if (verifying.confirmedHtml) {
-          logger.info("Saving Cloudflare snapshot after 5x2 verify timeout", {
-            target: targetDisplayLabel(target),
-            phase: "post_wait"
-          });
-          await saveCloudflareSnapshotIfEnabled(target, verifying.confirmedHtml, "post_wait");
-        }
+        const snapshotHtml = verifying.confirmedHtml ?? rawContent;
+        logger.info("Saving Cloudflare snapshot after unresolved challenge", {
+          target: targetDisplayLabel(target),
+          phase: "post_wait"
+        });
+        await saveCloudflareSnapshotIfEnabled(target, snapshotHtml, "post_wait");
         target.vgikCfChallengePaused = true;
         if (!target.vgikCfChallengeNotifySent) {
           await sentUser(
