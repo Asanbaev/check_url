@@ -109,7 +109,7 @@ function getMode3Step2Payload(): Record<string, string> {
   return {
     re_id: "8073544",
     "user_forms[0][surname]": "Асанбаева",
-    "user_forms[0][name]": "Полина",
+    "user_forms[0][name]": "Софья",
     "user_forms[0][question11179841]": "Вадимовна",
     "user_forms[0][question11179842]": "18918490730",
     "user_forms[0][question11179843]": "8022494594",

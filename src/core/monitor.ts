@@ -416,16 +416,13 @@ async function saveCloudflareSnapshotIfEnabled(
 }
 
 /**
- * Временный debug: сохраняем HTML при Navigation timeout только для VGIK_Федоров_14.
+ * Для navigation timeout всегда оставляем хотя бы fallback HTML, даже если страница уже в подвешенном состоянии.
  */
-async function saveVgikFedorov14TimeoutSnapshotIfNeeded(
+async function saveNavigationTimeoutSnapshotIfNeeded(
   target: RuntimeTarget,
   message: string
 ): Promise<void> {
-  const isFedorov14 =
-    targetDisplayLabel(target) === "VGIK_Федоров_14" || /\/event\/3951191(?:\/|$|\?)/.test(target.url);
-  const isNavigationTimeout = /navigation timeout/i.test(message);
-  if (!isFedorov14 || !isNavigationTimeout) {
+  if (!/navigation timeout/i.test(message)) {
     return;
   }
   const fallbackHtml = [
@@ -438,24 +435,25 @@ async function saveVgikFedorov14TimeoutSnapshotIfNeeded(
     "</body></html>"
   ].join("");
 
+  try {
+    const fallbackPath = await saveHtmlSnapshot(
+      target.page ? "unreachable_timeout_debug_fallback" : "unreachable_timeout_debug_no_page",
+      targetDisplayLabel(target),
+      fallbackHtml
+    );
+    logger.info("Saved timeout debug fallback html snapshot", {
+      target: targetDisplayLabel(target),
+      path: fallbackPath,
+      reason: target.page ? "navigation_timeout_pre_content" : "navigation_timeout_no_page"
+    });
+  } catch (error) {
+    logger.error("Timeout debug fallback html snapshot failed", {
+      target: targetDisplayLabel(target),
+      error: String(error)
+    });
+  }
+
   if (!target.page) {
-    try {
-      const savedPath = await saveHtmlSnapshot(
-        "unreachable_timeout_debug_no_page",
-        targetDisplayLabel(target),
-        fallbackHtml
-      );
-      logger.info("Saved timeout debug html snapshot (no page)", {
-        target: targetDisplayLabel(target),
-        path: savedPath,
-        reason: "navigation_timeout"
-      });
-    } catch (error) {
-      logger.error("Timeout debug html snapshot failed (no page)", {
-        target: targetDisplayLabel(target),
-        error: String(error)
-      });
-    }
     return;
   }
   try {
@@ -470,27 +468,10 @@ async function saveVgikFedorov14TimeoutSnapshotIfNeeded(
       reason: "navigation_timeout"
     });
   } catch (error) {
-    logger.error("Timeout debug html snapshot failed, saving fallback", {
+    logger.error("Timeout debug html snapshot failed after fallback save", {
       target: targetDisplayLabel(target),
       error: String(error)
     });
-    try {
-      const savedPath = await saveHtmlSnapshot(
-        "unreachable_timeout_debug_fallback",
-        targetDisplayLabel(target),
-        fallbackHtml
-      );
-      logger.info("Saved timeout debug fallback html snapshot", {
-        target: targetDisplayLabel(target),
-        path: savedPath,
-        reason: "navigation_timeout_content_error"
-      });
-    } catch (fallbackError) {
-      logger.error("Timeout debug fallback html snapshot failed", {
-        target: targetDisplayLabel(target),
-        error: String(fallbackError)
-      });
-    }
   }
 }
 
@@ -979,7 +960,7 @@ async function puppeteerDebug(target: RuntimeTarget): Promise<void> {
   } catch (error) {
     const message = String(error);
     logger.error("error_puppeteerDebug", { dateNow, target: targetDisplayLabel(target), error: message });
-    await saveVgikFedorov14TimeoutSnapshotIfNeeded(target, message);
+    await saveNavigationTimeoutSnapshotIfNeeded(target, message);
     if (
       message.includes("ERR_NAME_NOT_RESOLVED") ||
       message.includes("ERR_CONNECTION") ||
