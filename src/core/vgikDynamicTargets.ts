@@ -3,11 +3,21 @@ import path from "node:path";
 import type { MonitorTarget, SearchMode } from "../config/targets";
 import { logger } from "../infra/logging/logger";
 
-const OUTPUTS_DIR = path.resolve(__dirname, "../../outputs");
-export const VGIK_DYNAMIC_TARGETS_FILE = path.join(OUTPUTS_DIR, "vgik_dynamic_targets.json");
+const STATE_DIR = path.resolve(__dirname, "../../state");
+export const VGIK_TARGETS_STATE_FILE = path.join(STATE_DIR, "vgik_targets.json");
+
+export type VgikWorkshop = "merzlikin" | "fyodorov";
+
+export interface PersistedVgikTarget extends MonitorTarget {
+  vgikDynamic?: boolean;
+  vgikRegistrationFilled?: boolean;
+  vgikWorkshop?: VgikWorkshop;
+  vgikSubmitReserved?: boolean;
+  vgikSubmitOnly?: boolean;
+}
 
 export type VgikDynamicStored = Pick<
-  MonitorTarget,
+  PersistedVgikTarget,
   | "name"
   | "theaterId"
   | "url"
@@ -21,10 +31,15 @@ export type VgikDynamicStored = Pick<
   | "msgElapsedHours"
   | "successText"
   | "submitting"
+  | "vgikDynamic"
+  | "vgikRegistrationFilled"
+  | "vgikWorkshop"
+  | "vgikSubmitReserved"
+  | "vgikSubmitOnly"
 >;
 
-function ensureOutputsDir(): void {
-  fs.mkdirSync(OUTPUTS_DIR, { recursive: true });
+function ensureStateDir(): void {
+  fs.mkdirSync(STATE_DIR, { recursive: true });
 }
 
 export function parseTimepadEventId(url: string): number | null {
@@ -42,10 +57,10 @@ export function parseTimepadEventId(url: string): number | null {
 
 function readJsonFile(): VgikDynamicStored[] {
   try {
-    if (!fs.existsSync(VGIK_DYNAMIC_TARGETS_FILE)) {
+    if (!fs.existsSync(VGIK_TARGETS_STATE_FILE)) {
       return [];
     }
-    const raw = fs.readFileSync(VGIK_DYNAMIC_TARGETS_FILE, "utf8").trim();
+    const raw = fs.readFileSync(VGIK_TARGETS_STATE_FILE, "utf8").trim();
     if (!raw) {
       return [];
     }
@@ -62,20 +77,44 @@ function readJsonFile(): VgikDynamicStored[] {
 
 export function writeDynamicTargetsFile(rows: VgikDynamicStored[]): void {
   try {
-    ensureOutputsDir();
-    fs.writeFileSync(VGIK_DYNAMIC_TARGETS_FILE, `${JSON.stringify(rows, null, 2)}\n`, "utf8");
+    ensureStateDir();
+    fs.writeFileSync(VGIK_TARGETS_STATE_FILE, `${JSON.stringify(rows, null, 2)}\n`, "utf8");
   } catch (error) {
     logger.error("vgik_dynamic_targets: write failed", { error: String(error) });
   }
 }
 
-/** Слияние: статические таргеты + записи из файла, которых нет в static по url. */
-export function mergeStaticWithDynamicTargets(staticTargets: MonitorTarget[]): MonitorTarget[] {
+function applyStoredRow(base: MonitorTarget, row: VgikDynamicStored): PersistedVgikTarget {
+  return {
+    ...base,
+    enabled: row.enabled !== false,
+    requested: false,
+    requestedTime: row.requestedTime ?? base.requestedTime,
+    stage: row.stage ?? base.stage,
+    submitting: row.submitting === true,
+    vgikDynamic: false,
+    vgikRegistrationFilled: row.vgikRegistrationFilled === true,
+    vgikWorkshop: row.vgikWorkshop,
+    vgikSubmitReserved: row.vgikSubmitReserved === true,
+    vgikSubmitOnly: row.vgikSubmitOnly === true
+  };
+}
+
+/** Слияние: статические таргеты + persisted state по URL + dynamic VGIK target-ы, которых нет в static. */
+export function mergeStaticWithDynamicTargets(staticTargets: MonitorTarget[]): PersistedVgikTarget[] {
   const fromFile = readJsonFile();
-  const staticUrls = new Set(staticTargets.map((t) => t.url));
-  const extras: MonitorTarget[] = [];
+  const rowsByUrl = new Map(fromFile.map((row) => [row.url, row]));
+  const mergedStatic: PersistedVgikTarget[] = staticTargets.map((target) => {
+    const row = rowsByUrl.get(target.url);
+    if (!row) {
+      return { ...target };
+    }
+    return applyStoredRow(target, row);
+  });
+  const staticUrls = new Set(mergedStatic.map((t) => t.url));
+  const extras: PersistedVgikTarget[] = [];
   for (const row of fromFile) {
-    if (!row.url || staticUrls.has(row.url)) {
+    if (!row.url || staticUrls.has(row.url) || row.vgikDynamic !== true) {
       continue;
     }
     extras.push({
@@ -91,10 +130,15 @@ export function mergeStaticWithDynamicTargets(staticTargets: MonitorTarget[]): M
       stage: row.stage ?? 0,
       msgElapsedHours: row.msgElapsedHours ?? 3,
       successText: row.successText ?? "%%__NO_MATCH__QWERTY_ЪЫЬ_92731__%%",
-      submitting: row.submitting === true
+      submitting: row.submitting === true,
+      vgikDynamic: true,
+      vgikRegistrationFilled: row.vgikRegistrationFilled === true,
+      vgikWorkshop: row.vgikWorkshop,
+      vgikSubmitReserved: row.vgikSubmitReserved === true,
+      vgikSubmitOnly: row.vgikSubmitOnly === true
     });
   }
-  return [...staticTargets, ...extras];
+  return [...mergedStatic, ...extras];
 }
 
 export function upsertDynamicTargetRow(row: VgikDynamicStored): void {
@@ -111,8 +155,8 @@ export function upsertDynamicTargetRow(row: VgikDynamicStored): void {
 export function buildNewTimepadDynamicTarget(
   eventUrl: string,
   eventId: number,
-  template: Pick<MonitorTarget, "searchText" | "searchMode" | "msgElapsedHours" | "successText">
-): MonitorTarget {
+  template: Pick<MonitorTarget, "msgElapsedHours">
+): PersistedVgikTarget {
   const normalizedUrl = eventUrl.replace(/\/?$/, "/");
   return {
     name: `Timepad_${eventId}`,
@@ -120,18 +164,26 @@ export function buildNewTimepadDynamicTarget(
     url: normalizedUrl,
     enabled: true,
     submitting: false,
-    searchText: template.searchText,
-    searchMode: template.searchMode,
-    waitForSelector: false,
+    searchText: "регистрация на предварительное прослушивание закрыта, так как все места уже заняты!",
+    searchMode: "contains",
+    waitForSelector: true,
     requested: false,
     requestedTime: "2026-04-01 15:00:00",
     stage: 0,
     msgElapsedHours: template.msgElapsedHours,
-    successText: template.successText
+    successText: "%%__NO_MATCH__QWERTY_ЪЫЬ_92731__%%",
+    vgikDynamic: true,
+    vgikRegistrationFilled: false,
+    vgikSubmitReserved: false,
+    vgikSubmitOnly: false
   };
 }
 
-export function toStoredRow(t: MonitorTarget): VgikDynamicStored {
+export function findReservedWorkshopTargetUrl(workshop: VgikWorkshop): string | undefined {
+  return readJsonFile().find((row) => row.vgikWorkshop === workshop && row.vgikSubmitReserved === true)?.url;
+}
+
+export function toStoredRow(t: PersistedVgikTarget): VgikDynamicStored {
   return {
     name: t.name,
     theaterId: t.theaterId,
@@ -145,6 +197,11 @@ export function toStoredRow(t: MonitorTarget): VgikDynamicStored {
     stage: t.stage,
     msgElapsedHours: t.msgElapsedHours,
     successText: t.successText,
-    submitting: t.submitting === true
+    submitting: t.submitting === true,
+    vgikDynamic: t.vgikDynamic === true,
+    vgikRegistrationFilled: t.vgikRegistrationFilled === true,
+    vgikWorkshop: t.vgikWorkshop,
+    vgikSubmitReserved: t.vgikSubmitReserved === true,
+    vgikSubmitOnly: t.vgikSubmitOnly === true
   };
 }

@@ -24,12 +24,20 @@ export interface RuntimeTarget extends MonitorTarget {
   priemvgikCookieHeader?: string;
   /** VGIK HTML-submit: не раньше этого времени (ms) следующая попытка */
   nextVgikSubmitAtMs?: number;
-  /** Таргет добавлен из outputs/vgik_dynamic_targets.json */
+  /** Таргет добавлен из persisted VGIK state file. */
   vgikDynamic?: boolean;
   /** Уже выполнено первичное заполнение анкеты Timepad */
   vgikRegistrationFilled?: boolean;
-  /** Динамический Timepad: уже зафиксирована «закрытая регистрация» (чтобы не слать повторно) */
+  /** Уже зафиксирована «закрытая регистрация» (чтобы не слать повторно) */
   vgikDynamicClosedHandled?: boolean;
+  /** Мастерская, вычисленная по содержимому страницы/виджета. */
+  vgikWorkshop?: "merzlikin" | "fyodorov";
+  /** Этот target зарезервирован как единственная submit-страница своей мастерской. */
+  vgikSubmitReserved?: boolean;
+  /** Target выведен из обычной ротации и живёт только своим submit/fill state. */
+  vgikSubmitOnly?: boolean;
+  /** Подряд идущие navigation timeout для решения, когда сохранять debug snapshot. */
+  navigationTimeoutStreak?: number;
 }
 
 export class BrowserClient {

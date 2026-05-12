@@ -3,21 +3,24 @@ import type { ResourceStatus } from "../infra/db/resourceStatusLog.model";
 import { logger } from "../infra/logging/logger";
 import { saveHtmlSnapshot } from "../infra/logging/outputHtmlLogger";
 import type { RuntimeTarget } from "../infra/browser/browserClient";
-import type { MonitorTarget } from "../config/targets";
 import { targetDisplayLabel } from "../config/targets";
 import type { VgikSubmitForm } from "./vgikSubmitForm";
 import { DEFAULT_VGIK_SUBMIT_FORM } from "./vgikSubmitForm";
-import { parseTimepadEventId, toStoredRow, upsertDynamicTargetRow } from "./vgikDynamicTargets";
+import {
+  findReservedWorkshopTargetUrl,
+  parseTimepadEventId,
+  toStoredRow,
+  upsertDynamicTargetRow,
+  type VgikWorkshop
+} from "./vgikDynamicTargets";
 
 const SURNAME_MARKER = "user_forms[0][surname]";
-
-let merzlikinHtmlAutoSubmitUsed = false;
-let fyodorovHtmlAutoSubmitUsed = false;
-
-export function resetVgikWorkshopSubmitFlagsForTests(): void {
-  merzlikinHtmlAutoSubmitUsed = false;
-  fyodorovHtmlAutoSubmitUsed = false;
-}
+const VGIK_SUBMIT_SUCCESS_MARKERS = [
+  "вы только что зарегистрировались",
+  "ваша регистрация прошла успешно",
+  "регистрация прошла успешно"
+];
+const VGIK_SUBMIT_BLOCKING_MARKERS = ["мест нет", "ошибка", "больше не осталось"];
 
 export function isPriemvgikEventUrl(url: string): boolean {
   return /priemvgik\.timepad\.ru\/event\/\d+/i.test(url);
@@ -54,7 +57,15 @@ export async function getTimepadRegisterFrame(page: Page): Promise<Frame | null>
   return handle.contentFrame();
 }
 
-function workshopFromText(text: string): "merzlikin" | "fyodorov" | null {
+async function findTimepadRegisterFrame(page: Page): Promise<Frame | null> {
+  const handle = await page.$('iframe[name^="tpw__"]');
+  if (!handle) {
+    return null;
+  }
+  return handle.contentFrame();
+}
+
+function workshopFromText(text: string): VgikWorkshop | null {
   const t = text.toLowerCase();
   if (t.includes("мерзликин")) {
     return "merzlikin";
@@ -181,6 +192,24 @@ async function buildQuestionMapFromFrame(frame: Frame): Promise<Record<string, k
   });
 }
 
+function normalizeVgikText(text: string): string {
+  return text.replace(/\s+/g, " ").trim().toLowerCase();
+}
+
+function getVgikBlockingMarkers(target: RuntimeTarget): string[] {
+  return [...new Set([target.searchText, ...VGIK_SUBMIT_BLOCKING_MARKERS].map(normalizeVgikText).filter(Boolean))];
+}
+
+async function collectVgikCombinedLowerText(target: RuntimeTarget, frame?: Frame | null): Promise<string> {
+  const pageHtml = target.page ? await target.page.content().catch(() => "") : "";
+  const frameText = frame
+    ? await frame
+        .evaluate(() => (document.body?.innerText ?? document.documentElement.textContent ?? ""))
+        .catch(() => "")
+    : "";
+  return normalizeVgikText(`${pageHtml}\n${frameText}`);
+}
+
 export async function saveVgikFormFillPayloadJson(
   targetLabel: string,
   eventId: number,
@@ -200,7 +229,7 @@ export async function saveVgikFormFillPayloadJson(
 }
 
 /**
- * Один тик: без reload, проверка формы/кнопки, при необходимости submit и ожидание HTTP.
+ * Один тик HTML submit: делаем попытку и считаем успехом исчезновение блокирующего текста.
  */
 export async function runVgikSubmittingTick(
   target: RuntimeTarget,
@@ -228,6 +257,7 @@ export async function runVgikSubmittingTick(
       "key_error"
     );
     target.nextVgikSubmitAtMs = now + retryMs;
+    upsertDynamicTargetRow(toStoredRow(target));
     return;
   }
 
@@ -247,6 +277,7 @@ export async function runVgikSubmittingTick(
       // ignore
     }
     target.nextVgikSubmitAtMs = now + retryMs;
+    upsertDynamicTargetRow(toStoredRow(target));
     return;
   }
 
@@ -264,6 +295,7 @@ export async function runVgikSubmittingTick(
 
     const resp = await respPromise;
     await waitNav;
+    await new Promise((resolve) => setTimeout(resolve, 800));
     status = resp ? resp.status() : null;
   } catch (error) {
     logger.error("runVgikSubmittingTick: submit click failed", {
@@ -272,18 +304,25 @@ export async function runVgikSubmittingTick(
     });
   }
 
-  if (status === 200) {
+  const postFrame = await findTimepadRegisterFrame(target.page);
+  const combinedLower = await collectVgikCombinedLowerText(target, postFrame);
+  const blockingMarkers = getVgikBlockingMarkers(target);
+  const matchedMarkers = blockingMarkers.filter((marker) => combinedLower.includes(marker));
+  const successMatched = VGIK_SUBMIT_SUCCESS_MARKERS.some((marker) => combinedLower.includes(marker));
+
+  if (successMatched || matchedMarkers.length === 0) {
     await onNotify(`${targetDisplayLabel(target)}: успешная запись`, "key_false");
     target.submitting = false;
     target.enabled = false;
     target.nextVgikSubmitAtMs = undefined;
-    upsertDynamicTargetRow(toStoredRow(target as MonitorTarget));
+    target.vgikSubmitOnly = true;
+    upsertDynamicTargetRow(toStoredRow(target));
     return;
   }
 
   const code = status === null ? "нет ответа" : String(status);
   await onNotify(
-    `${targetDisplayLabel(target)}: сделана попытка сабмита с формы html, пришел ответ с кодом ${code}`,
+    `${targetDisplayLabel(target)}: сделана попытка сабмита с формы html, код=${code}, блокеры=${matchedMarkers.join(" | ") || "нет"}`,
     "key_false"
   );
   try {
@@ -293,22 +332,26 @@ export async function runVgikSubmittingTick(
     // ignore
   }
   target.nextVgikSubmitAtMs = now + retryMs;
-  upsertDynamicTargetRow(toStoredRow(target as MonitorTarget));
+  upsertDynamicTargetRow(toStoredRow(target));
 }
 
 /**
- * Первичная регистрация на динамическом Timepad-таргете: поиск формы, fill, JSON, уведомления.
+ * Первичная регистрация на VGIK Timepad-таргете: поиск формы, fill, JSON, уведомления.
  * @returns true если обработано (ветка завершена, дальше не идти в общий searchText).
  */
-export async function tryVgikDynamicTimepadRegistrationFlow(
+export async function tryVgikTimepadRegistrationFlow(
   target: RuntimeTarget,
   rawContentLower: string,
   onNotify: NotifyFn
 ): Promise<boolean> {
-  if (Number(process.env.VGIK_MAI_MODE ?? "1") !== 3) {
+  const flowEnabled =
+    (process.env.VGIK_TIMEPAD_FLOW_ENABLED ?? process.env.VGIK_HTML_SUBMIT_ENABLED ?? "false")
+      .trim()
+      .toLowerCase() === "true";
+  if (!flowEnabled) {
     return false;
   }
-  if (target.theaterId !== "VGIK" || !isPriemvgikEventUrl(target.url) || !target.vgikDynamic || target.vgikRegistrationFilled) {
+  if (target.theaterId !== "VGIK" || !isPriemvgikEventUrl(target.url) || target.vgikRegistrationFilled) {
     return false;
   }
   if (!target.page) {
@@ -326,7 +369,7 @@ export async function tryVgikDynamicTimepadRegistrationFlow(
   if (target.searchMode === "contains" && closedFound) {
     if (!target.vgikDynamicClosedHandled) {
       target.vgikDynamicClosedHandled = true;
-      await onNotify(`${targetDisplayLabel(target)}: закрыто (регистрация недоступна)`, "key_ok");
+      await onNotify(`${targetDisplayLabel(target)}: закрыто`, "key_ok");
     }
     return true;
   }
@@ -358,9 +401,8 @@ export async function tryVgikDynamicTimepadRegistrationFlow(
     logger.error("saveVgikFormFillPayloadJson failed", { error: String(error) });
   }
 
-  target.enabled = false;
   target.vgikRegistrationFilled = true;
-  upsertDynamicTargetRow(toStoredRow(target as MonitorTarget));
+  upsertDynamicTargetRow(toStoredRow(target));
 
   await onNotify(
     `${targetDisplayLabel(target)}: Форма анкеты заполнена, делается попытка сабмит отдельной формы`,
@@ -372,35 +414,43 @@ export async function tryVgikDynamicTimepadRegistrationFlow(
   const workshop = workshopFromText(mainHtml + widgetHtml);
 
   if (!htmlSubmitEnv) {
+    target.enabled = false;
+    upsertDynamicTargetRow(toStoredRow(target));
     return true;
   }
 
   if (!workshop) {
+    target.enabled = false;
+    upsertDynamicTargetRow(toStoredRow(target));
+    return true;
+  }
+
+  target.vgikWorkshop = workshop;
+  const reservedUrl = findReservedWorkshopTargetUrl(workshop);
+  if (reservedUrl && reservedUrl !== target.url) {
+    target.vgikSubmitReserved = false;
+    target.enabled = false;
+    upsertDynamicTargetRow(toStoredRow(target));
+    await onNotify(`${targetDisplayLabel(target)}: форма заполнена, нажимайте регистрацию`, "key_false");
     return true;
   }
 
   if (workshop === "merzlikin") {
-    if (merzlikinHtmlAutoSubmitUsed) {
-      await onNotify(`${targetDisplayLabel(target)}: форма заполнена, нажимайте регистрацию`, "key_false");
-      return true;
-    }
-    merzlikinHtmlAutoSubmitUsed = true;
+    target.enabled = true;
     target.submitting = true;
+    target.vgikSubmitReserved = true;
     target.nextVgikSubmitAtMs = Date.now();
-    upsertDynamicTargetRow(toStoredRow(target as MonitorTarget));
+    upsertDynamicTargetRow(toStoredRow(target));
     await runVgikSubmittingTick(target, onNotify);
     return true;
   }
 
   if (workshop === "fyodorov") {
-    if (fyodorovHtmlAutoSubmitUsed) {
-      await onNotify(`${targetDisplayLabel(target)}: форма заполнена, нажимайте регистрацию`, "key_false");
-      return true;
-    }
-    fyodorovHtmlAutoSubmitUsed = true;
+    target.enabled = true;
     target.submitting = true;
+    target.vgikSubmitReserved = true;
     target.nextVgikSubmitAtMs = Date.now();
-    upsertDynamicTargetRow(toStoredRow(target as MonitorTarget));
+    upsertDynamicTargetRow(toStoredRow(target));
     await runVgikSubmittingTick(target, onNotify);
     return true;
   }

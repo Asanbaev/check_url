@@ -9,10 +9,10 @@ import {
   runGitisPipeline
 } from "./gitisModule";
 import {
-  collectNewTimepadEventUrls,
   isVgikMaiFacultyPage,
   pageLooksLikeVgikCloudflareChallenge,
   pageShowsVgikCloudflareVerifying,
+  pickBestNewTimepadEventUrl,
   runVgikMaiFacultyFlow,
   runVgikMode4SubmitLoop
 } from "./vgikMaiModule";
@@ -26,8 +26,7 @@ import {
 import {
   isPriemvgikEventUrl,
   runVgikSubmittingTick,
-  syncPriemvgikCookiesToTarget,
-  tryVgikDynamicTimepadRegistrationFlow
+  tryVgikTimepadRegistrationFlow
 } from "./vgikTimepadFlow";
 import { publishAlert } from "../infra/publisher/alertPublisher";
 import { logger } from "../infra/logging/logger";
@@ -61,30 +60,37 @@ const gitisSubmitEnabled =
   (process.env.GITIS_SUBMIT_ENABLED ?? "false").trim().toLowerCase() === "true";
 const gitisSubmitBeforeDate = (process.env.GITIS_SUBMIT_BEFORE_DATE ?? "2026-06-01").trim();
 const vgikMaiMode = Number(process.env.VGIK_MAI_MODE ?? "1");
+const vgikHtmlSubmitEnabled =
+  (process.env.VGIK_HTML_SUBMIT_ENABLED ?? "false").trim().toLowerCase() === "true";
 const quietHoursStart = Number(process.env.QUIET_HOURS_START ?? "22");
 const quietHoursEnd = Number(process.env.QUIET_HOURS_END ?? "7");
 const nightIntervalMultiplier = Number(process.env.NIGHT_INTERVAL_MULTIPLIER ?? "60");
 let intTime = Number(process.env.CHECK_INTERVAL_MS ?? "20000");
 let urlPast: boolean[] = [];
 let targetIdMap = new Map<string, number>();
-/** Ссылка на массив рантайм-таргетов текущего цикла (для добавления вкладок Timepad из факультета в режиме 3). */
-let monitorRuntimeTargetsRef: RuntimeTarget[] | null = null;
 let lastCleanupHour: string | null = null;
 let browserClientRef: BrowserClient | null = null;
+let runtimeTargetsRef: RuntimeTarget[] = [];
 
-function getPublishTargetId(target: RuntimeTarget): number | undefined {
-  const directId = targetIdMap.get(target.url);
-  if (directId !== undefined) {
-    return directId;
+async function ensureRuntimeTargetForNewVgikTimepad(eventUrl: string): Promise<RuntimeTarget | null> {
+  const normalizedUrl = eventUrl.replace(/\/?$/, "/");
+  const existing = runtimeTargetsRef.find((target) => target.url === normalizedUrl);
+  if (existing) {
+    return existing;
   }
-  if (target.theaterId === "VGIK" && target.vgikDynamic) {
-    for (const [url, id] of targetIdMap.entries()) {
-      if (isVgikMaiFacultyPage(url)) {
-        return id;
-      }
-    }
+  const eventId = parseTimepadEventId(normalizedUrl);
+  if (!eventId) {
+    return null;
   }
-  return undefined;
+  const dynamicTarget = buildNewTimepadDynamicTarget(normalizedUrl, eventId, {
+    msgElapsedHours: msgMinValue
+  }) as RuntimeTarget;
+  runtimeTargetsRef.push(dynamicTarget);
+  upsertDynamicTargetRow(toStoredRow(dynamicTarget));
+  if (browserClientRef) {
+    await browserClientRef.bindPages([dynamicTarget]);
+  }
+  return dynamicTarget;
 }
 
 function isIsoDate(s: string): boolean {
@@ -186,7 +192,7 @@ function isChromeErrorUrl(url: string): boolean {
 }
 
 async function writeStatusLog(target: RuntimeTarget, status: ResourceStatus, details: string): Promise<boolean> {
-  const targetId = getPublishTargetId(target);
+  const targetId = targetIdMap.get(target.url);
   if (!targetId) {
     logger.error("writeStatusLog: target_id not found for url (status_log not written)", {
       target: targetDisplayLabel(target),
@@ -219,7 +225,7 @@ async function writeStatusLog(target: RuntimeTarget, status: ResourceStatus, det
 
 /** Читает последний статус из status_log по target_id, чтобы отфильтровать дубли между инстансами. */
 async function getLastDbStatusForTarget(target: RuntimeTarget): Promise<ResourceStatus | null> {
-  const targetId = getPublishTargetId(target);
+  const targetId = targetIdMap.get(target.url);
   if (!targetId) {
     return null;
   }
@@ -370,7 +376,7 @@ async function sentUser(
   const shouldNotify = !sameResourceStatusAsLastNotify || intervalDue;
 
   if (shouldNotify) {
-    const targetId = getPublishTargetId(target);
+    const targetId = targetIdMap.get(target.url);
     const telegramMessage = clickableTelegramMessage(msg, target.url, telegramParseMode, resourceStatus);
     if (targetId) {
       await publishAlert({
@@ -407,7 +413,7 @@ async function sendTelegramStepNotification(
   msg: string,
   resourceStatus: ResourceStatus
 ): Promise<void> {
-  const targetId = getPublishTargetId(target);
+  const targetId = targetIdMap.get(target.url);
   if (!targetId) {
     logger.error("sendTelegramStepNotification: target_id not found", { target: targetDisplayLabel(target), url: target.url });
     return;
@@ -420,65 +426,6 @@ async function sendTelegramStepNotification(
     message: clickableTelegramMessage(msg, target.url, undefined, resourceStatus),
     telegramParseMode: "HTML"
   });
-}
-
-/**
- * Режим VGIK_MAI_MODE=3: открыть вкладки на все новые URL Timepad, синхронизировать БД и outputs/vgik_dynamic_targets.json.
- */
-async function ingestVgikDynamicTimepadTabs(
-  facultyTarget: RuntimeTarget,
-  newUrls: string[],
-  allRuntimeTargets: RuntimeTarget[]
-): Promise<void> {
-  const browser = facultyTarget.page?.browser();
-  if (!browser) {
-    return;
-  }
-  const templateRt = allRuntimeTargets.find(
-    (t) => t.theaterId === "VGIK" && isPriemvgikEventUrl(t.url) && t.waitForSelector
-  );
-  if (!templateRt) {
-    logger.error("ingestVgikDynamicTimepadTabs: нет шаблонного таргета VGIK с waitForSelector (priemvgik)", {
-      count: allRuntimeTargets.length
-    });
-    return;
-  }
-  const templatePick = {
-    searchText: templateRt.searchText,
-    searchMode: templateRt.searchMode,
-    msgElapsedHours: templateRt.msgElapsedHours,
-    successText: templateRt.successText
-  };
-  const existing = new Set(allRuntimeTargets.map((t) => t.url));
-  for (const url of newUrls) {
-    if (existing.has(url)) {
-      continue;
-    }
-    const eventId = parseTimepadEventId(url);
-    if (eventId === null) {
-      continue;
-    }
-    const mt = buildNewTimepadDynamicTarget(url, eventId, templatePick);
-    const rowRt: RuntimeTarget = { ...mt, vgikDynamic: true };
-    const tab = await browser.newPage();
-    try {
-      await tab.goto(rowRt.url, { waitUntil: "networkidle2", timeout: pageGotoTimeoutMs });
-    } catch (error) {
-      logger.error("ingestVgikDynamicTimepadTabs: goto failed", { url: rowRt.url, error: String(error) });
-      await tab.close().catch(() => {});
-      continue;
-    }
-    rowRt.page = tab;
-    await syncPriemvgikCookiesToTarget(rowRt);
-    allRuntimeTargets.push(rowRt);
-    urlPast.push(false);
-    upsertDynamicTargetRow(toStoredRow(mt));
-    existing.add(url);
-    logger.info("ingestVgikDynamicTimepadTabs: добавлена вкладка", {
-      name: rowRt.name,
-      url: rowRt.url
-    });
-  }
 }
 
 async function saveCloudflareSnapshotIfEnabled(
@@ -505,13 +452,16 @@ async function saveCloudflareSnapshotIfEnabled(
 }
 
 /**
- * Для navigation timeout всегда оставляем хотя бы fallback HTML, даже если страница уже в подвешенном состоянии.
+ * Временный debug: сохраняем HTML при Navigation timeout только для VGIK_Федоров_14.
  */
-async function saveNavigationTimeoutSnapshotIfNeeded(
+async function saveVgikFedorov14TimeoutSnapshotIfNeeded(
   target: RuntimeTarget,
   message: string
 ): Promise<void> {
-  if (!/navigation timeout/i.test(message)) {
+  const isFedorov14 =
+    targetDisplayLabel(target) === "VGIK_Федоров_14" || /\/event\/3951191(?:\/|$|\?)/.test(target.url);
+  const isNavigationTimeout = /navigation timeout/i.test(message);
+  if (!isFedorov14 || !isNavigationTimeout) {
     return;
   }
   const fallbackHtml = [
@@ -524,25 +474,24 @@ async function saveNavigationTimeoutSnapshotIfNeeded(
     "</body></html>"
   ].join("");
 
-  try {
-    const fallbackPath = await saveHtmlSnapshot(
-      target.page ? "unreachable_timeout_debug_fallback" : "unreachable_timeout_debug_no_page",
-      targetDisplayLabel(target),
-      fallbackHtml
-    );
-    logger.info("Saved timeout debug fallback html snapshot", {
-      target: targetDisplayLabel(target),
-      path: fallbackPath,
-      reason: target.page ? "navigation_timeout_pre_content" : "navigation_timeout_no_page"
-    });
-  } catch (error) {
-    logger.error("Timeout debug fallback html snapshot failed", {
-      target: targetDisplayLabel(target),
-      error: String(error)
-    });
-  }
-
   if (!target.page) {
+    try {
+      const savedPath = await saveHtmlSnapshot(
+        "unreachable_timeout_debug_no_page",
+        targetDisplayLabel(target),
+        fallbackHtml
+      );
+      logger.info("Saved timeout debug html snapshot (no page)", {
+        target: targetDisplayLabel(target),
+        path: savedPath,
+        reason: "navigation_timeout"
+      });
+    } catch (error) {
+      logger.error("Timeout debug html snapshot failed (no page)", {
+        target: targetDisplayLabel(target),
+        error: String(error)
+      });
+    }
     return;
   }
   try {
@@ -557,10 +506,27 @@ async function saveNavigationTimeoutSnapshotIfNeeded(
       reason: "navigation_timeout"
     });
   } catch (error) {
-    logger.error("Timeout debug html snapshot failed after fallback save", {
+    logger.error("Timeout debug html snapshot failed, saving fallback", {
       target: targetDisplayLabel(target),
       error: String(error)
     });
+    try {
+      const savedPath = await saveHtmlSnapshot(
+        "unreachable_timeout_debug_fallback",
+        targetDisplayLabel(target),
+        fallbackHtml
+      );
+      logger.info("Saved timeout debug fallback html snapshot", {
+        target: targetDisplayLabel(target),
+        path: savedPath,
+        reason: "navigation_timeout_content_error"
+      });
+    } catch (fallbackError) {
+      logger.error("Timeout debug fallback html snapshot failed", {
+        target: targetDisplayLabel(target),
+        error: String(fallbackError)
+      });
+    }
   }
 }
 
@@ -614,13 +580,6 @@ async function puppeteerDebug(target: RuntimeTarget): Promise<void> {
   try {
     target.requested = true;
     await target.page.setViewport({ width: 1920, height: 1080 });
-
-    if (target.submitting) {
-      await runVgikSubmittingTick(target, async (msg, status) => {
-        await sendTelegramStepNotification(target, msg, status);
-      });
-      return;
-    }
 
     const vgikCf = target.theaterId === "VGIK";
     let skipReload = false;
@@ -721,6 +680,27 @@ async function puppeteerDebug(target: RuntimeTarget): Promise<void> {
         await target.page.waitForSelector('iframe[name^="tpw__"]', {
           timeout: waitForIframeTimeoutMs
         });
+
+        if (vgikCf && vgikHtmlSubmitEnabled && isPriemvgikEventUrl(target.url)) {
+          const notify = async (message: string, status: ResourceStatus) => {
+            await sentUser(message, 0, true, target, status);
+          };
+          if (vgikMaiMode === 4 && target.url.includes("/3976144/")) {
+            runVgikMode4SubmitLoop(target.url, targetDisplayLabel(target), target.page, async (stepMsg: string) => {
+              await sentUser(stepMsg, 0, true, target, "key_false");
+            });
+          }
+          if (target.submitting) {
+            await runVgikSubmittingTick(target, notify);
+            return;
+          }
+          const rawHtml = await target.page.content();
+          const handled = await tryVgikTimepadRegistrationFlow(target, rawHtml.toLowerCase(), notify);
+          if (handled) {
+            return;
+          }
+        }
+
         const iframeElement = await target.page.$('iframe[name^="tpw__"]');
         const frame = await iframeElement?.contentFrame();
         if (frame) {
@@ -816,43 +796,19 @@ async function puppeteerDebug(target: RuntimeTarget): Promise<void> {
     }
     target.availabilityState = "up";
 
-    if (target.theaterId === "VGIK" && isPriemvgikEventUrl(target.url)) {
-      await syncPriemvgikCookiesToTarget(target);
-      const vgikDynHandled = await tryVgikDynamicTimepadRegistrationFlow(
-        target,
-        rawContent.toLowerCase(),
-        async (msg, status) => {
-          await sendTelegramStepNotification(target, msg, status);
-        }
-      );
-      if (vgikDynHandled) {
-        return;
-      }
-    }
-
     if (isVgikMaiFacultyPage(target.url)) {
-      if (vgikMaiMode === 2 || vgikMaiMode === 3 || vgikMaiMode === 4) {
         const rawMax = Number(process.env.VGIK_MAI_MAX_TIMEPAD_EVENT_ID ?? "3931025");
         const exclusiveFloor = Number.isFinite(rawMax) ? rawMax : 3931025;
-        const newUrls = collectNewTimepadEventUrls(rawContent, exclusiveFloor);
-        if (newUrls.length > 0) {
-          const primary = newUrls[0];
-          const extra = newUrls.length > 1 ? ` (+ещё ${newUrls.length - 1})` : "";
-          const newLinkMsg = `${targetDisplayLabel(target)}: Найдена новая ссылка на май ${primary}${extra}`;
-          await writeStatusLogIfDue(target, "key_false", newLinkMsg);
-          await sendTelegramStepNotification(target, newLinkMsg, "key_false");
-          target.lastAlertResourceStatus = "key_false";
-          target.lastUserNotifyAt = nowMoscowString();
-          target.stage = 0;
-          datePast = dateNow;
-          if (vgikMaiMode === 4 && target.page) {
-            runVgikMode4SubmitLoop(target.url, targetDisplayLabel(target), target.page, async (stepMsg) => {
-              const stepStatus: ResourceStatus = stepMsg.includes("ответ изменился") ? "key_false" : "key_ok";
-              await sendTelegramStepNotification(target, stepMsg, stepStatus);
-            });
-          }
-          if (vgikMaiMode === 3 && target.name === "New" && monitorRuntimeTargetsRef) {
-            await ingestVgikDynamicTimepadTabs(target, newUrls, monitorRuntimeTargetsRef);
+        const timepadUrl = pickBestNewTimepadEventUrl(rawContent, exclusiveFloor);
+        if (timepadUrl) {
+          await sentUser(`${targetDisplayLabel(target)}: Найдена новая ссылка на май ${timepadUrl}`, 0, true, target, "key_false", "HTML");
+          const dynamicTarget = await ensureRuntimeTargetForNewVgikTimepad(timepadUrl);
+          if (dynamicTarget && dynamicTarget.page && vgikHtmlSubmitEnabled && !dynamicTarget.vgikRegistrationFilled) {
+            const notify = async (message: string, status: ResourceStatus) => {
+              await sendTelegramStepNotification(dynamicTarget, message, status);
+            };
+            const dynamicRawHtml = await dynamicTarget.page.content().catch(() => "");
+            await tryVgikTimepadRegistrationFlow(dynamicTarget, dynamicRawHtml.toLowerCase(), notify);
           }
         } else {
           await writeStatusLogIfDue(target, "key_ok", `${targetDisplayLabel(target)}: Новых дат на май пока нет`);
@@ -861,7 +817,6 @@ async function puppeteerDebug(target: RuntimeTarget): Promise<void> {
           }
         }
         return;
-      }
     }
 
     if (target.theaterId === "GITIS") {
@@ -1073,7 +1028,7 @@ async function puppeteerDebug(target: RuntimeTarget): Promise<void> {
   } catch (error) {
     const message = String(error);
     logger.error("error_puppeteerDebug", { dateNow, target: targetDisplayLabel(target), error: message });
-    await saveNavigationTimeoutSnapshotIfNeeded(target, message);
+    await saveVgikFedorov14TimeoutSnapshotIfNeeded(target, message);
     if (
       message.includes("ERR_NAME_NOT_RESOLVED") ||
       message.includes("ERR_CONNECTION") ||
@@ -1093,7 +1048,7 @@ async function puppeteerDebug(target: RuntimeTarget): Promise<void> {
 
 async function checkURL(target: RuntimeTarget): Promise<void> {
   try {
-    if (!target.enabled && !target.submitting) {
+    if (!target.enabled) {
       return;
     }
     if (!target.page && browserClientRef) {
@@ -1181,7 +1136,7 @@ async function checkSite(targets: RuntimeTarget[]): Promise<void> {
     }
 
     for (let i = 0; i < targets.length; i += 1) {
-      if (!targets[i].enabled && !targets[i].submitting) {
+      if (!targets[i].enabled) {
         continue;
       }
       const elapsedMs = DateTime.fromISO(dateNow.replace(" ", "T"))
@@ -1232,13 +1187,10 @@ export async function runMonitor(targets: MonitorTarget[]): Promise<void> {
   });
 
   const mergedTargets = mergeStaticWithDynamicTargets(targets);
-  const staticTargetUrls = new Set(targets.map((target) => target.url));
+
   const urlToTargetId = new Map<string, number>();
 
   for (const target of mergedTargets) {
-    if (!staticTargetUrls.has(target.url)) {
-      continue;
-    }
     const desiredCode = targetDisplayLabel(target);
     try {
       const [row] = await withDbRetry(`runMonitor.findOrCreate target=${desiredCode}`, async () =>
@@ -1269,33 +1221,26 @@ export async function runMonitor(targets: MonitorTarget[]): Promise<void> {
     }
   }
 
-  const runtimeTargets: RuntimeTarget[] = mergedTargets
-    .filter((target) => target.enabled || target.submitting)
-    .map((target) => ({ ...target, vgikDynamic: !staticTargetUrls.has(target.url) }));
+  const runtimeTargets: RuntimeTarget[] = mergedTargets.filter((target) => target.enabled).map((target) => ({ ...target }));
   if (runtimeTargets.length === 0) {
-    throw new Error("No enabled or submitting targets after merge");
+    throw new Error("No enabled targets in config/targets.ts");
   }
+  runtimeTargetsRef = runtimeTargets;
   urlPast = new Array(runtimeTargets.length).fill(false);
 
   targetIdMap.clear();
   for (const target of runtimeTargets) {
     const id = urlToTargetId.get(target.url);
     if (id === undefined) {
-      if (target.vgikDynamic) {
-        continue;
-      }
       logger.error("runMonitor: target id missing after sync, disabling runtime target", {
         target: targetDisplayLabel(target),
         url: target.url
       });
       target.enabled = false;
-      target.submitting = false;
       continue;
     }
     targetIdMap.set(target.url, id);
   }
-
-  monitorRuntimeTargetsRef = runtimeTargets;
 
   const browserClient = new BrowserClient();
   browserClientRef = browserClient;

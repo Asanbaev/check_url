@@ -6,7 +6,7 @@ import { logger } from "../logging/logger";
 import { moscowWallClockLiteralForDb } from "../time/moscowDb";
 
 export interface PublishAlertInput {
-  targetId: number;
+  targetId?: number;
   targetName: string;
   targetUrl: string;
   status: ResourceStatus;
@@ -42,11 +42,15 @@ export async function publishAlert(input: PublishAlertInput): Promise<void> {
       target: input.targetName,
       status: input.status
     });
+    if (input.targetId === undefined) {
+      return;
+    }
     try {
+      const targetId = input.targetId;
       const moscowDt = moscowWallClockLiteralForDb();
-      const outbound = await withDbRetry(`publishAlert.createNoRecipient targetId=${input.targetId}`, async () =>
+      const outbound = await withDbRetry(`publishAlert.createNoRecipient targetId=${targetId}`, async () =>
         OutboundPostRequest.create({
-          target_id: input.targetId,
+          target_id: targetId,
           req_body: { action: "resolve_recipients", result: "empty", status: input.status },
           status: "failed",
           created_at: moscowDt,
@@ -81,27 +85,27 @@ export async function publishAlert(input: PublishAlertInput): Promise<void> {
       requestBody.parseMode = "html";
     }
     let outbound: OutboundPostRequest | null = null;
-    try {
-      const moscowDt = moscowWallClockLiteralForDb();
-      outbound = await withDbRetry(`publishAlert.create targetId=${input.targetId} tgChatId=${tgChatId}`, async () =>
-        OutboundPostRequest.create({
-          target_id: input.targetId,
-          req_body: requestBody,
-          status: "pending",
-          created_at: moscowDt,
-          updated_at: moscowDt
-        })
-      );
-    } catch (error) {
-      logger.error("publishAlert: failed to create outbound row", {
-        target: input.targetName,
-        targetId: input.targetId,
-        tgChatId,
-        error: String(error)
-      });
-    }
-    if (!outbound) {
-      continue;
+    if (input.targetId !== undefined) {
+      try {
+        const targetId = input.targetId;
+        const moscowDt = moscowWallClockLiteralForDb();
+        outbound = await withDbRetry(`publishAlert.create targetId=${targetId} tgChatId=${tgChatId}`, async () =>
+          OutboundPostRequest.create({
+            target_id: targetId,
+            req_body: requestBody,
+            status: "pending",
+            created_at: moscowDt,
+            updated_at: moscowDt
+          })
+        );
+      } catch (error) {
+        logger.error("publishAlert: failed to create outbound row", {
+          target: input.targetName,
+          targetId: input.targetId,
+          tgChatId,
+          error: String(error)
+        });
+      }
     }
     try {
       const response = await axios.post(requestUrl, requestBody, {
@@ -111,13 +115,26 @@ export async function publishAlert(input: PublishAlertInput): Promise<void> {
         },
         timeout: 15000
       });
-      outbound.status = "sent";
-      outbound.http_status = response.status;
-      outbound.res_body = response.data as Record<string, unknown>;
-      outbound.error_text = null;
+      if (outbound) {
+        outbound.status = "sent";
+        outbound.http_status = response.status;
+        outbound.res_body = response.data as Record<string, unknown>;
+        outbound.error_text = null;
+      }
     } catch (error) {
-      outbound.status = "failed";
-      outbound.error_text = String(error);
+      if (outbound) {
+        outbound.status = "failed";
+        outbound.error_text = String(error);
+      }
+      logger.error("publishAlert: request failed", {
+        target: input.targetName,
+        targetId: input.targetId,
+        tgChatId,
+        error: String(error)
+      });
+    }
+    if (!outbound) {
+      continue;
     }
     try {
       await withDbRetry(`publishAlert.save targetId=${input.targetId} tgChatId=${tgChatId}`, async () => outbound.save());
