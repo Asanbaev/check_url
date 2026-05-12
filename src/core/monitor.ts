@@ -9,13 +9,26 @@ import {
   runGitisPipeline
 } from "./gitisModule";
 import {
+  collectNewTimepadEventUrls,
   isVgikMaiFacultyPage,
   pageLooksLikeVgikCloudflareChallenge,
   pageShowsVgikCloudflareVerifying,
-  pickBestNewTimepadEventUrl,
   runVgikMaiFacultyFlow,
-  runVgikMode3SubmitLoop
+  runVgikMode4SubmitLoop
 } from "./vgikMaiModule";
+import {
+  buildNewTimepadDynamicTarget,
+  mergeStaticWithDynamicTargets,
+  parseTimepadEventId,
+  toStoredRow,
+  upsertDynamicTargetRow
+} from "./vgikDynamicTargets";
+import {
+  isPriemvgikEventUrl,
+  runVgikSubmittingTick,
+  syncPriemvgikCookiesToTarget,
+  tryVgikDynamicTimepadRegistrationFlow
+} from "./vgikTimepadFlow";
 import { publishAlert } from "../infra/publisher/alertPublisher";
 import { logger } from "../infra/logging/logger";
 import { saveHtmlSnapshot } from "../infra/logging/outputHtmlLogger";
@@ -54,8 +67,25 @@ const nightIntervalMultiplier = Number(process.env.NIGHT_INTERVAL_MULTIPLIER ?? 
 let intTime = Number(process.env.CHECK_INTERVAL_MS ?? "20000");
 let urlPast: boolean[] = [];
 let targetIdMap = new Map<string, number>();
+/** Ссылка на массив рантайм-таргетов текущего цикла (для добавления вкладок Timepad из факультета в режиме 3). */
+let monitorRuntimeTargetsRef: RuntimeTarget[] | null = null;
 let lastCleanupHour: string | null = null;
 let browserClientRef: BrowserClient | null = null;
+
+function getPublishTargetId(target: RuntimeTarget): number | undefined {
+  const directId = targetIdMap.get(target.url);
+  if (directId !== undefined) {
+    return directId;
+  }
+  if (target.theaterId === "VGIK" && target.vgikDynamic) {
+    for (const [url, id] of targetIdMap.entries()) {
+      if (isVgikMaiFacultyPage(url)) {
+        return id;
+      }
+    }
+  }
+  return undefined;
+}
 
 function isIsoDate(s: string): boolean {
   return /^\d{4}-\d{2}-\d{2}$/.test(s);
@@ -156,7 +186,7 @@ function isChromeErrorUrl(url: string): boolean {
 }
 
 async function writeStatusLog(target: RuntimeTarget, status: ResourceStatus, details: string): Promise<boolean> {
-  const targetId = targetIdMap.get(target.url);
+  const targetId = getPublishTargetId(target);
   if (!targetId) {
     logger.error("writeStatusLog: target_id not found for url (status_log not written)", {
       target: targetDisplayLabel(target),
@@ -189,7 +219,7 @@ async function writeStatusLog(target: RuntimeTarget, status: ResourceStatus, det
 
 /** Читает последний статус из status_log по target_id, чтобы отфильтровать дубли между инстансами. */
 async function getLastDbStatusForTarget(target: RuntimeTarget): Promise<ResourceStatus | null> {
-  const targetId = targetIdMap.get(target.url);
+  const targetId = getPublishTargetId(target);
   if (!targetId) {
     return null;
   }
@@ -340,7 +370,7 @@ async function sentUser(
   const shouldNotify = !sameResourceStatusAsLastNotify || intervalDue;
 
   if (shouldNotify) {
-    const targetId = targetIdMap.get(target.url);
+    const targetId = getPublishTargetId(target);
     const telegramMessage = clickableTelegramMessage(msg, target.url, telegramParseMode, resourceStatus);
     if (targetId) {
       await publishAlert({
@@ -377,7 +407,7 @@ async function sendTelegramStepNotification(
   msg: string,
   resourceStatus: ResourceStatus
 ): Promise<void> {
-  const targetId = targetIdMap.get(target.url);
+  const targetId = getPublishTargetId(target);
   if (!targetId) {
     logger.error("sendTelegramStepNotification: target_id not found", { target: targetDisplayLabel(target), url: target.url });
     return;
@@ -390,6 +420,65 @@ async function sendTelegramStepNotification(
     message: clickableTelegramMessage(msg, target.url, undefined, resourceStatus),
     telegramParseMode: "HTML"
   });
+}
+
+/**
+ * Режим VGIK_MAI_MODE=3: открыть вкладки на все новые URL Timepad, синхронизировать БД и outputs/vgik_dynamic_targets.json.
+ */
+async function ingestVgikDynamicTimepadTabs(
+  facultyTarget: RuntimeTarget,
+  newUrls: string[],
+  allRuntimeTargets: RuntimeTarget[]
+): Promise<void> {
+  const browser = facultyTarget.page?.browser();
+  if (!browser) {
+    return;
+  }
+  const templateRt = allRuntimeTargets.find(
+    (t) => t.theaterId === "VGIK" && isPriemvgikEventUrl(t.url) && t.waitForSelector
+  );
+  if (!templateRt) {
+    logger.error("ingestVgikDynamicTimepadTabs: нет шаблонного таргета VGIK с waitForSelector (priemvgik)", {
+      count: allRuntimeTargets.length
+    });
+    return;
+  }
+  const templatePick = {
+    searchText: templateRt.searchText,
+    searchMode: templateRt.searchMode,
+    msgElapsedHours: templateRt.msgElapsedHours,
+    successText: templateRt.successText
+  };
+  const existing = new Set(allRuntimeTargets.map((t) => t.url));
+  for (const url of newUrls) {
+    if (existing.has(url)) {
+      continue;
+    }
+    const eventId = parseTimepadEventId(url);
+    if (eventId === null) {
+      continue;
+    }
+    const mt = buildNewTimepadDynamicTarget(url, eventId, templatePick);
+    const rowRt: RuntimeTarget = { ...mt, vgikDynamic: true };
+    const tab = await browser.newPage();
+    try {
+      await tab.goto(rowRt.url, { waitUntil: "networkidle2", timeout: pageGotoTimeoutMs });
+    } catch (error) {
+      logger.error("ingestVgikDynamicTimepadTabs: goto failed", { url: rowRt.url, error: String(error) });
+      await tab.close().catch(() => {});
+      continue;
+    }
+    rowRt.page = tab;
+    await syncPriemvgikCookiesToTarget(rowRt);
+    allRuntimeTargets.push(rowRt);
+    urlPast.push(false);
+    upsertDynamicTargetRow(toStoredRow(mt));
+    existing.add(url);
+    logger.info("ingestVgikDynamicTimepadTabs: добавлена вкладка", {
+      name: rowRt.name,
+      url: rowRt.url
+    });
+  }
 }
 
 async function saveCloudflareSnapshotIfEnabled(
@@ -525,6 +614,13 @@ async function puppeteerDebug(target: RuntimeTarget): Promise<void> {
   try {
     target.requested = true;
     await target.page.setViewport({ width: 1920, height: 1080 });
+
+    if (target.submitting) {
+      await runVgikSubmittingTick(target, async (msg, status) => {
+        await sendTelegramStepNotification(target, msg, status);
+      });
+      return;
+    }
 
     const vgikCf = target.theaterId === "VGIK";
     let skipReload = false;
@@ -720,23 +816,44 @@ async function puppeteerDebug(target: RuntimeTarget): Promise<void> {
     }
     target.availabilityState = "up";
 
+    if (target.theaterId === "VGIK" && isPriemvgikEventUrl(target.url)) {
+      await syncPriemvgikCookiesToTarget(target);
+      const vgikDynHandled = await tryVgikDynamicTimepadRegistrationFlow(
+        target,
+        rawContent.toLowerCase(),
+        async (msg, status) => {
+          await sendTelegramStepNotification(target, msg, status);
+        }
+      );
+      if (vgikDynHandled) {
+        return;
+      }
+    }
+
     if (isVgikMaiFacultyPage(target.url)) {
-      if (vgikMaiMode === 2 || vgikMaiMode === 3) {
+      if (vgikMaiMode === 2 || vgikMaiMode === 3 || vgikMaiMode === 4) {
         const rawMax = Number(process.env.VGIK_MAI_MAX_TIMEPAD_EVENT_ID ?? "3931025");
         const exclusiveFloor = Number.isFinite(rawMax) ? rawMax : 3931025;
-        const timepadUrl = pickBestNewTimepadEventUrl(rawContent, exclusiveFloor);
-        if (timepadUrl) {
-          await sentUser(`${targetDisplayLabel(target)}: Найдена новая ссылка на май ${timepadUrl}`, 0, true, target, "key_false", "HTML");
-          if (vgikMaiMode === 3 && target.page) {
-            runVgikMode3SubmitLoop(target.url, targetDisplayLabel(target), target.page, async (stepMsg) => {
+        const newUrls = collectNewTimepadEventUrls(rawContent, exclusiveFloor);
+        if (newUrls.length > 0) {
+          const primary = newUrls[0];
+          const extra = newUrls.length > 1 ? ` (+ещё ${newUrls.length - 1})` : "";
+          const newLinkMsg = `${targetDisplayLabel(target)}: Найдена новая ссылка на май ${primary}${extra}`;
+          await writeStatusLogIfDue(target, "key_false", newLinkMsg);
+          await sendTelegramStepNotification(target, newLinkMsg, "key_false");
+          target.lastAlertResourceStatus = "key_false";
+          target.lastUserNotifyAt = nowMoscowString();
+          target.stage = 0;
+          datePast = dateNow;
+          if (vgikMaiMode === 4 && target.page) {
+            runVgikMode4SubmitLoop(target.url, targetDisplayLabel(target), target.page, async (stepMsg) => {
               const stepStatus: ResourceStatus = stepMsg.includes("ответ изменился") ? "key_false" : "key_ok";
               await sendTelegramStepNotification(target, stepMsg, stepStatus);
             });
           }
-          // const browser = target.page.browser();
-          // if (browser) {
-          //   await runVgikMaiFacultyFlow(browser, rawContent, targetDisplayLabel(target));
-          // }
+          if (vgikMaiMode === 3 && target.name === "New" && monitorRuntimeTargetsRef) {
+            await ingestVgikDynamicTimepadTabs(target, newUrls, monitorRuntimeTargetsRef);
+          }
         } else {
           await writeStatusLogIfDue(target, "key_ok", `${targetDisplayLabel(target)}: Новых дат на май пока нет`);
           if (msgElapsedHours >= msgMinValue || target.stage !== 0) {
@@ -745,10 +862,6 @@ async function puppeteerDebug(target: RuntimeTarget): Promise<void> {
         }
         return;
       }
-      // const browser = target.page.browser();
-      // if (browser) {
-      //   await runVgikMaiFacultyFlow(browser, rawContent, targetDisplayLabel(target));
-      // }
     }
 
     if (target.theaterId === "GITIS") {
@@ -980,7 +1093,7 @@ async function puppeteerDebug(target: RuntimeTarget): Promise<void> {
 
 async function checkURL(target: RuntimeTarget): Promise<void> {
   try {
-    if (!target.enabled) {
+    if (!target.enabled && !target.submitting) {
       return;
     }
     if (!target.page && browserClientRef) {
@@ -1068,7 +1181,7 @@ async function checkSite(targets: RuntimeTarget[]): Promise<void> {
     }
 
     for (let i = 0; i < targets.length; i += 1) {
-      if (!targets[i].enabled) {
+      if (!targets[i].enabled && !targets[i].submitting) {
         continue;
       }
       const elapsedMs = DateTime.fromISO(dateNow.replace(" ", "T"))
@@ -1118,9 +1231,14 @@ export async function runMonitor(targets: MonitorTarget[]): Promise<void> {
     gitisSubmitEnabled
   });
 
+  const mergedTargets = mergeStaticWithDynamicTargets(targets);
+  const staticTargetUrls = new Set(targets.map((target) => target.url));
   const urlToTargetId = new Map<string, number>();
 
-  for (const target of targets) {
+  for (const target of mergedTargets) {
+    if (!staticTargetUrls.has(target.url)) {
+      continue;
+    }
     const desiredCode = targetDisplayLabel(target);
     try {
       const [row] = await withDbRetry(`runMonitor.findOrCreate target=${desiredCode}`, async () =>
@@ -1151,9 +1269,11 @@ export async function runMonitor(targets: MonitorTarget[]): Promise<void> {
     }
   }
 
-  const runtimeTargets: RuntimeTarget[] = targets.filter((target) => target.enabled).map((target) => ({ ...target }));
+  const runtimeTargets: RuntimeTarget[] = mergedTargets
+    .filter((target) => target.enabled || target.submitting)
+    .map((target) => ({ ...target, vgikDynamic: !staticTargetUrls.has(target.url) }));
   if (runtimeTargets.length === 0) {
-    throw new Error("No enabled targets in config/targets.ts");
+    throw new Error("No enabled or submitting targets after merge");
   }
   urlPast = new Array(runtimeTargets.length).fill(false);
 
@@ -1161,15 +1281,21 @@ export async function runMonitor(targets: MonitorTarget[]): Promise<void> {
   for (const target of runtimeTargets) {
     const id = urlToTargetId.get(target.url);
     if (id === undefined) {
+      if (target.vgikDynamic) {
+        continue;
+      }
       logger.error("runMonitor: target id missing after sync, disabling runtime target", {
         target: targetDisplayLabel(target),
         url: target.url
       });
       target.enabled = false;
+      target.submitting = false;
       continue;
     }
     targetIdMap.set(target.url, id);
   }
+
+  monitorRuntimeTargetsRef = runtimeTargets;
 
   const browserClient = new BrowserClient();
   browserClientRef = browserClient;

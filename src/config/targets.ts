@@ -20,6 +20,8 @@ export interface MonitorTarget {
   datePast?: string;
   msgElapsedHours: number;
   successText?: string;
+  /** VGIK: режим повторного HTML-submit без reload страницы мониторинга */
+  submitting?: boolean;
 }
 
 export const targets: MonitorTarget[] = [
@@ -83,6 +85,7 @@ export const targets: MonitorTarget[] = [
     name: "New",
     theaterId: "VGIK",
     enabled: true,
+    submitting: false,
     url: "https://vgik.info/abiturient/higher/spetsialitet/aktyerskiy-fakultet/",
     searchText: " мая ",
     searchMode: "not_contains",

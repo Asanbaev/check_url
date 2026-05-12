@@ -20,6 +20,16 @@ export interface RuntimeTarget extends MonitorTarget {
   vgikCfChallengePaused?: boolean;
   /** VGIK: одноразовое уведомление о паузе по Cloudflare на инцидент */
   vgikCfChallengeNotifySent?: boolean;
+  /** Cookie-строка для priemvgik.timepad.ru (обновляется общей процедурой sync). */
+  priemvgikCookieHeader?: string;
+  /** VGIK HTML-submit: не раньше этого времени (ms) следующая попытка */
+  nextVgikSubmitAtMs?: number;
+  /** Таргет добавлен из outputs/vgik_dynamic_targets.json */
+  vgikDynamic?: boolean;
+  /** Уже выполнено первичное заполнение анкеты Timepad */
+  vgikRegistrationFilled?: boolean;
+  /** Динамический Timepad: уже зафиксирована «закрытая регистрация» (чтобы не слать повторно) */
+  vgikDynamicClosedHandled?: boolean;
 }
 
 export class BrowserClient {

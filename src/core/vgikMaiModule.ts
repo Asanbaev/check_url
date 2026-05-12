@@ -5,8 +5,10 @@ import { logger } from "../infra/logging/logger";
 
 /** Страница факультета, где в таблице появляются май и ссылки на Timepad */
 export const VGIK_MAI_FACULTY_PAGE_URL = "https://vgik.info/abiturient/higher/spetsialitet/aktyerskiy-fakultet/";
-const VGIK_MODE3_POLL_MS = 20000;
-const vgikMode3LoopState = new Map<string, { lastCombinedResponse: string | null; active: boolean }>();
+const VGIK_SUBMIT_RETRY_MS = Number(
+  process.env.VGIK_SUBMIT_RETRY_MS ?? process.env.VGIK_MODE3_POLL_MS ?? "20000"
+);
+const vgikMode4LoopState = new Map<string, { lastCombinedResponse: string | null; active: boolean }>();
 
 function normalizeUrlPath(url: string): string {
   try {
@@ -46,20 +48,24 @@ export function pageShowsVgikCloudflareVerifying(html: string): boolean {
  * (верхняя граница уже известных номеров из VGIK_MAI_MAX_TIMEPAD_EVENT_ID),
  * возвращает URL события с максимальным id (самый «новый» номер на странице).
  */
-export function pickBestNewTimepadEventUrl(html: string, exclusiveFloor: number): string | null {
+export function collectNewTimepadEventUrls(html: string, exclusiveFloor: number): string[] {
   const re = /https:\/\/priemvgik\.timepad\.ru\/event\/(\d+)\/?/gi;
-  let bestId = -1;
+  const ids = new Set<number>();
   let m: RegExpExecArray | null;
   while ((m = re.exec(html)) !== null) {
     const id = Number.parseInt(m[1], 10);
-    if (Number.isFinite(id) && id > exclusiveFloor && id > bestId) {
-      bestId = id;
+    if (Number.isFinite(id) && id > exclusiveFloor) {
+      ids.add(id);
     }
   }
-  if (bestId < 0) {
-    return null;
-  }
-  return `https://priemvgik.timepad.ru/event/${bestId}/`;
+  return [...ids]
+    .sort((a, b) => b - a)
+    .map((id) => `https://priemvgik.timepad.ru/event/${id}/`);
+}
+
+export function pickBestNewTimepadEventUrl(html: string, exclusiveFloor: number): string | null {
+  const urls = collectNewTimepadEventUrls(html, exclusiveFloor);
+  return urls.length > 0 ? urls[0] : null;
 }
 
 function encodeFormData(payload: Record<string, string>): string {
@@ -144,25 +150,30 @@ async function buildCookieHeader(page: Page): Promise<string> {
   return cookies.map((c) => `${c.name}=${c.value}`).join("; ");
 }
 
-/** MODE=3: два POST каждые 20с, пока ответ не изменится; всё логируем в консоль.
- * `stateKey` — стабильный ключ состояния (URL таргета); `messageLabel` — текст в сообщениях. */
-export function runVgikMode3SubmitLoop(
+/** VGIK_MAI_MODE=4: два POST каждые N мс, пока ответ не изменится (ручные URL и тела в коде). */
+export function runVgikMode4SubmitLoop(
   stateKey: string,
   messageLabel: string,
   page: Page,
   onStepResult?: (message: string) => Promise<void>
 ): void {
-  const state = vgikMode3LoopState.get(stateKey);
+  const state = vgikMode4LoopState.get(stateKey);
   if (state?.active) {
     return;
   }
-  vgikMode3LoopState.set(stateKey, { lastCombinedResponse: null, active: true });
+  vgikMode4LoopState.set(stateKey, { lastCombinedResponse: null, active: true });
 
-  const step1Url = process.env.VGIK_MODE3_STEP1_URL ?? "https://priemvgik.timepad.ru/event/widget_register/3951176";
-  const step2Url = process.env.VGIK_MODE3_STEP2_URL ?? "https://priemvgik.timepad.ru/event/widget_register/3951179";
+  const step1Url =
+    process.env.VGIK_MODE4_STEP1_URL ??
+    process.env.VGIK_MODE3_STEP1_URL ??
+    "https://priemvgik.timepad.ru/event/widget_register/3951176";
+  const step2Url =
+    process.env.VGIK_MODE4_STEP2_URL ??
+    process.env.VGIK_MODE3_STEP2_URL ??
+    "https://priemvgik.timepad.ru/event/widget_register/3951179";
 
   const tick = async () => {
-    const current = vgikMode3LoopState.get(stateKey);
+    const current = vgikMode4LoopState.get(stateKey);
     if (!current?.active) {
       return;
     }
@@ -192,27 +203,27 @@ export function runVgikMode3SubmitLoop(
       const body2 = typeof step2.data === "string" ? step2.data : JSON.stringify(step2.data);
       const combined = `${step1.status}|${body1.slice(0, 1500)}||${step2.status}|${body2.slice(0, 1500)}`;
 
-      console.log("[VGIK MODE3] step1", { target: messageLabel, url: step1Url, status: step1.status });
-      console.log("[VGIK MODE3] step2", { target: messageLabel, url: step2Url, status: step2.status });
+      console.log("[VGIK MODE4] step1", { target: messageLabel, url: step1Url, status: step1.status });
+      console.log("[VGIK MODE4] step2", { target: messageLabel, url: step2Url, status: step2.status });
       if (onStepResult) {
-        await onStepResult(`${messageLabel}: VGIK mode3 step1 status=${step1.status}`);
-        await onStepResult(`${messageLabel}: VGIK mode3 step2 status=${step2.status}`);
+        await onStepResult(`${messageLabel}: VGIK mode4 step1 status=${step1.status}`);
+        await onStepResult(`${messageLabel}: VGIK mode4 step2 status=${step2.status}`);
       }
 
       if (current.lastCombinedResponse !== null && current.lastCombinedResponse !== combined) {
-        console.log("[VGIK MODE3] response changed, stopping loop", { target: messageLabel });
+        console.log("[VGIK MODE4] response changed, stopping loop", { target: messageLabel });
         if (onStepResult) {
-          await onStepResult(`${messageLabel}: VGIK mode3 ответ изменился, цикл остановлен`);
+          await onStepResult(`${messageLabel}: VGIK mode4 ответ изменился, цикл остановлен`);
         }
-        vgikMode3LoopState.set(stateKey, { lastCombinedResponse: combined, active: false });
+        vgikMode4LoopState.set(stateKey, { lastCombinedResponse: combined, active: false });
         return;
       }
-      vgikMode3LoopState.set(stateKey, { lastCombinedResponse: combined, active: true });
+      vgikMode4LoopState.set(stateKey, { lastCombinedResponse: combined, active: true });
     } catch (error) {
-      console.log("[VGIK MODE3] submit loop error", { target: messageLabel, error: String(error) });
+      console.log("[VGIK MODE4] submit loop error", { target: messageLabel, error: String(error) });
     } finally {
-      if (vgikMode3LoopState.get(stateKey)?.active) {
-        setTimeout(() => void tick(), VGIK_MODE3_POLL_MS);
+      if (vgikMode4LoopState.get(stateKey)?.active) {
+        setTimeout(() => void tick(), VGIK_SUBMIT_RETRY_MS);
       }
     }
   };
