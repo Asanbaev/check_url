@@ -67,7 +67,8 @@ export const targets: MonitorTarget[] = [
     msgElapsedHours: 3,
     successText: "Вы уже записаны"
   },
-  {
+  { // при статусе "Фразу, что сбор Анкет прекращён не нашёл, проверь !! SHEPKIN_Форма"
+    // не направляется уведомление Софье, это оставил, т.к не надо уже, отправили форму
     name: "Форма",
     theaterId: "SHEPKIN",
     enabled: false,

@@ -56,6 +56,9 @@ const saveCloudflareHtml =
   process.env.SAVE_CLOUDFLARE_HTML === "1" || process.env.SAVE_CLOUDFLARE_HTML === "true";
 const logPageNavigated =
   process.env.PAGE_NAVIGATED_LOG_ENABLED === "1" || process.env.PAGE_NAVIGATED_LOG_ENABLED === "true";
+const notifySuppressedLogEnabled =
+  process.env.NOTIFY_SUPPRESSED_LOG_ENABLED === "1" ||
+  (process.env.NOTIFY_SUPPRESSED_LOG_ENABLED ?? "false").trim().toLowerCase() === "true";
 const gitisSubmitEnabled =
   (process.env.GITIS_SUBMIT_ENABLED ?? "false").trim().toLowerCase() === "true";
 const gitisSubmitBeforeDate = (process.env.GITIS_SUBMIT_BEFORE_DATE ?? "2026-06-01").trim();
@@ -371,9 +374,9 @@ async function sentUser(
     logger.error("key_false html snapshot skipped: no page handle", { target: targetDisplayLabel(target) });
   }
 
+  const statusChanged = target.lastAlertResourceStatus !== resourceStatus;
   const intervalDue = elapsedHoursFrom(target.lastUserNotifyAt) >= msgMinValue;
-  const sameResourceStatusAsLastNotify = target.lastAlertResourceStatus === resourceStatus;
-  const shouldNotify = !sameResourceStatusAsLastNotify || intervalDue;
+  const shouldNotify = statusChanged || intervalDue || target.stage !== 0;
 
   if (shouldNotify) {
     const targetId = targetIdMap.get(target.url);
@@ -391,12 +394,15 @@ async function sentUser(
     target.lastAlertResourceStatus = resourceStatus;
     target.lastUserNotifyAt = nowMoscowString();
   } else {
-    logger.info("Notify suppressed (same resourceStatus / interval)", {
-      target: targetDisplayLabel(target),
-      resourceStatus,
-      stageBefore: target.stage,
-      intervalDue
-    });
+    if (notifySuppressedLogEnabled) {
+      logger.info("Notify suppressed (same resourceStatus / interval)", {
+        target: targetDisplayLabel(target),
+        resourceStatus,
+        stageBefore: target.stage,
+        statusChanged,
+        intervalDue
+      });
+    }
   }
   logger.info(`Status registered ${targetDisplayLabel(target)} ${resourceStatus} ${msg}`);
   target.stage = stage;
@@ -746,10 +752,8 @@ async function puppeteerDebug(target: RuntimeTarget): Promise<void> {
       } else {
         // Всегда пишем в БД каждые 5 минут
         await writeStatusLogIfDue(target, "key_ok", `${targetDisplayLabel(target)}: закрыто`);
-        // Но уведомления в Telegram только когда MSG_MIN_HOURS прошло
-        if (target.msgElapsedHours >= msgMinValue || target.stage !== 0) {
-          await sentUser(`${targetDisplayLabel(target)}: закрыто`, 0, true, target, "key_ok");
-        }
+        // Уведомления отправляются если статус изменился, прошел интервал, или это первый цикл
+        await sentUser(`${targetDisplayLabel(target)}: закрыто`, 0, true, target, "key_ok");
       }
       return;
     }
@@ -812,9 +816,8 @@ async function puppeteerDebug(target: RuntimeTarget): Promise<void> {
           }
         } else {
           await writeStatusLogIfDue(target, "key_ok", `${targetDisplayLabel(target)}: Новых дат на май пока нет`);
-          if (msgElapsedHours >= msgMinValue || target.stage !== 0) {
-            await sentUser(`${targetDisplayLabel(target)}: Новых дат на май пока нет`, 0, true, target, "key_ok");
-          }
+          // Уведомления отправляются если статус изменился, прошел интервал, или это первый цикл
+          await sentUser(`${targetDisplayLabel(target)}: Новых дат на май пока нет`, 0, true, target, "key_ok");
         }
         return;
     }
@@ -1005,16 +1008,14 @@ async function puppeteerDebug(target: RuntimeTarget): Promise<void> {
             ? `${targetDisplayLabel(target)}: Свободных дат пока нет`
             : `${targetDisplayLabel(target)}: Анкеты не принимаются`;
         await writeStatusLogIfDue(target, "key_ok", msgOk);
-        if (msgElapsedHours >= msgMinValue || target.stage !== 0) {
-          await sentUser(msgOk, 0, true, target, "key_ok");
-        }
+        // Уведомления отправляются если статус изменился, прошел интервал, или это первый цикл
+        await sentUser(msgOk, 0, true, target, "key_ok");
       }
     } else if (target.searchMode === "not_contains") {
       const msgNotOpen = `${targetDisplayLabel(target)}: Запись на<b><u>${target.searchText}</u></b>не открыта`;
       await writeStatusLogIfDue(target, "key_ok", msgNotOpen);
-      if (msgElapsedHours >= msgMinValue || target.stage !== 0) {
-        await sentUser(msgNotOpen, 0, true, target, "key_ok", "HTML");
-      }
+      // Уведомления отправляются если статус изменился, прошел интервал, или это первый цикл
+      await sentUser(msgNotOpen, 0, true, target, "key_ok", "HTML");
     } else if (target.theaterId === "GITIS" || target.theaterId === "SHEPKIN") {
       const msgOk2 =
       target.theaterId === "GITIS"

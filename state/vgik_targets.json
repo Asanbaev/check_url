@@ -38,5 +38,25 @@
     "vgikSubmitReserved": true,
     "vgikSubmitOnly": false,
     "vgikWorkshop": "fyodorov"
+  },
+  {
+    "name": "Федоров_18",
+    "theaterId": "VGIK",
+    "url": "https://priemvgik.timepad.ru/event/3976138/",
+    "enabled": false,
+    "searchText": "регистрация на предварительное прослушивание закрыта, так как все места уже заняты!",
+    "searchMode": "contains",
+    "waitForSelector": true,
+    "requested": false,
+    "requestedTime": "2026-05-13 13:35:37",
+    "stage": 0,
+    "msgElapsedHours": 0.07,
+    "successText": "%%__NO_MATCH__QWERTY_ЪЫЬ_92731__%%",
+    "submitting": false,
+    "vgikDynamic": false,
+    "vgikRegistrationFilled": true,
+    "vgikSubmitReserved": false,
+    "vgikSubmitOnly": false,
+    "vgikWorkshop": "fyodorov"
   }
 ]

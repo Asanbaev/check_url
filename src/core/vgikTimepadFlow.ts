@@ -18,8 +18,12 @@ const SURNAME_MARKER = "user_forms[0][surname]";
 const VGIK_SUBMIT_SUCCESS_MARKERS = [
   "вы только что зарегистрировались",
   "ваша регистрация прошла успешно",
-  "регистрация прошла успешно"
+  "регистрация прошла успешно",
+  "билет отправлен",
+  "ваше сообщение успешно отправлено"
 ];
+// по идее надо привязаться к этому маркеру :
+// Произошла неизвестная ошибка при отправке, попробуйте еще.
 const VGIK_SUBMIT_BLOCKING_MARKERS = ["мест нет", "ошибка", "больше не осталось"];
 
 export function isPriemvgikEventUrl(url: string): boolean {
@@ -367,10 +371,7 @@ export async function tryVgikTimepadRegistrationFlow(
   const searchLower = target.searchText.toLowerCase();
   const closedFound = combinedLower.includes(searchLower);
   if (target.searchMode === "contains" && closedFound) {
-    if (!target.vgikDynamicClosedHandled) {
-      target.vgikDynamicClosedHandled = true;
       await onNotify(`${targetDisplayLabel(target)}: закрыто`, "key_ok");
-    }
     return true;
   }
 
