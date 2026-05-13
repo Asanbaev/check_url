@@ -388,6 +388,10 @@ export async function tryVgikTimepadRegistrationFlow(
     return true;
   }
 
+  // Как только подтвержден этап формы, исключаем таргет из общего цикла reload/goto.
+  target.enabled = false;
+  upsertDynamicTargetRow(toStoredRow(target));
+
   const preset = DEFAULT_VGIK_SUBMIT_FORM;
   const qmap = await buildQuestionMapFromFrame(frame);
   await applyPresetToFrame(frame, preset, qmap);
@@ -436,7 +440,6 @@ export async function tryVgikTimepadRegistrationFlow(
   }
 
   if (workshop === "merzlikin") {
-    target.enabled = true;
     target.submitting = true;
     target.vgikSubmitReserved = true;
     target.nextVgikSubmitAtMs = Date.now();
@@ -446,7 +449,6 @@ export async function tryVgikTimepadRegistrationFlow(
   }
 
   if (workshop === "fyodorov") {
-    target.enabled = true;
     target.submitting = true;
     target.vgikSubmitReserved = true;
     target.nextVgikSubmitAtMs = Date.now();
