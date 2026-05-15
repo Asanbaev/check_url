@@ -2,8 +2,8 @@ node_modules/
 dist/
 
 # Environment variables
-.env
 .env.*
+.env
 !.env.example
 not_git/
 .cursor/
