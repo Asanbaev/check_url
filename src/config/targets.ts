@@ -100,7 +100,7 @@ export const targets: MonitorTarget[] = [
   {
     name: "Мерзликин_15",
     theaterId: "VGIK",
-    enabled: true,
+    enabled: false,
     url: "https://priemvgik.timepad.ru/event/3951179/",
     searchText: "регистрация на предварительное прослушивание закрыта, так как все места уже заняты!",
     searchMode: "contains",

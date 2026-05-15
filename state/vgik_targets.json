@@ -58,5 +58,25 @@
     "vgikSubmitReserved": false,
     "vgikSubmitOnly": false,
     "vgikWorkshop": "fyodorov"
+  },
+  {
+    "name": "Мерзликин_15",
+    "theaterId": "VGIK",
+    "url": "https://priemvgik.timepad.ru/event/3951179/",
+    "enabled": false,
+    "searchText": "регистрация на предварительное прослушивание закрыта, так как все места уже заняты!",
+    "searchMode": "contains",
+    "waitForSelector": true,
+    "requested": false,
+    "requestedTime": "2026-05-14 22:32:00",
+    "stage": 0,
+    "msgElapsedHours": 0.01,
+    "successText": "%%__NO_MATCH__QWERTY_ЪЫЬ_92731__%%",
+    "submitting": false,
+    "vgikDynamic": false,
+    "vgikRegistrationFilled": true,
+    "vgikSubmitReserved": false,
+    "vgikSubmitOnly": false,
+    "vgikWorkshop": "merzlikin"
   }
 ]

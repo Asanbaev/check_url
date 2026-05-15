@@ -1219,6 +1219,22 @@ export async function runMonitor(targets: MonitorTarget[]): Promise<void> {
         url: target.url,
         error: String(error)
       });
+      // Уведомление о падении БД
+      try {
+        await publishAlert({
+          targetName: targetDisplayLabel(target),
+          targetUrl: target.url,
+          status: "error",
+          message: `❗️ Ошибка при работе с БД: ${String(error)}`,
+          telegramParseMode: "HTML"
+        });
+      } catch (alertError) {
+        logger.error("runMonitor: failed to send DB down alert", {
+          target: targetDisplayLabel(target),
+          url: target.url,
+          error: String(alertError)
+        });
+      }
     }
   }
 
