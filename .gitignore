@@ -5,6 +5,8 @@ dist/
 .env
 .env.*
 !.env.example
+not_git/
+.cursor/
 
 # Logs
 *.log
@@ -85,12 +87,10 @@ __pycache__/
 *.njsproj
 /Project3.njsproj.user
 *.sln
+*.odt
 
 # Служебные txt-логи в корне (не трогаем requirements.txt и т.п. в подпроектах явно)
 /*.txt
 
 # macOS
 .DS_Store
-
-# Опционально: локальные артефакты Cursor (раскомментируйте при желании)
-# .cursor/
