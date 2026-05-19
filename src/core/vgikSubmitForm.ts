@@ -25,7 +25,7 @@ export const DEFAULT_VGIK_SUBMIT_FORM: VgikSubmitForm = {
   age: "18 лет",
   city: "Уфа",
   phone: "+79374745034",
-  mail: "sofaasanbai@gmail.com",
+  mail: "sofatvtv@yandex.ru",
   subscribeDigest: true,
   acceptedTerms: true
 };

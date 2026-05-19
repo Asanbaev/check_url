@@ -122,7 +122,7 @@ export function runVgikMode4SubmitLoop(
   const step1Url =
     process.env.VGIK_MODE4_STEP1_URL ??
     process.env.VGIK_MODE3_STEP1_URL ??
-    "https://priemvgik.timepad.ru/event/widget_register/3976144";
+    "https://priemvgik.timepad.ru/event/widget_register/3951181";
 
   const tick = async () => {
     const current = vgikMode4LoopState.get(stateKey);

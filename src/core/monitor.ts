@@ -691,7 +691,9 @@ async function puppeteerDebug(target: RuntimeTarget): Promise<void> {
           const notify = async (message: string, status: ResourceStatus) => {
             await sentUser(message, 0, true, target, status);
           };
-          if (vgikMaiMode === 4 && target.url.includes("/3976144/")) {
+
+          // прописывается конкретный таргет для фетч
+          if (vgikMaiMode === 4 && target.url.includes("/3951181/")) {
             runVgikMode4SubmitLoop(target.url, targetDisplayLabel(target), target.page, async (stepMsg: string) => {
               await sentUser(stepMsg, 0, true, target, "key_false");
             });
